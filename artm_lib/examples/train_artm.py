@@ -52,7 +52,7 @@ def main():
         tokenizer=simple_tokenizer,
     )
     loader = DataLoader(
-        dataset, batch_size=256, collate_fn=ARTMCollator(len(token_to_id)), num_workers=4
+        dataset, batch_size=256, collate_fn=ARTMCollator(len(token_to_id)), num_workers=0
     )
 
     # 3. Обучение
