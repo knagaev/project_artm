@@ -9,7 +9,7 @@ description = "Lightweight, dependency-free ARTM (Additive Regularization of Top
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
-    "polars>=1.36.1",
+    "polars[rtcompat]>=1.36.1",
     "scipy>=1.16.3",
     "torch>=2.9.1",
     "torchvision>=0.24.1",
