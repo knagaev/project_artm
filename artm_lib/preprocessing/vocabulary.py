@@ -1,3 +1,4 @@
+from typing import Callable
 from pathlib import Path
 
 import polars as pl
@@ -13,10 +14,10 @@ def simple_tokenizer(x):
 def build_vocab_and_index_from_parquet(
     parquet_dir_str: str,
     text_column: str = "Description",
-    tokenizer: Callable[[str], List[str]] = simple_tokenizer,
+    tokenizer: Callable[[str], list[str]] = simple_tokenizer,
     min_df: int = 1,
     max_df: float = 1.0,
-) -> Tuple[dict, List[Tuple[str, int]]]:
+) -> tuple[dict, list[tuple[str, int]]]:
     """
     Проходит по всем Parquet-файлам, строит частотный словарь и индекс документов.
     Возвращает:
