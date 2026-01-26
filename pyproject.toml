@@ -7,13 +7,16 @@ name = "artm-lib"
 version = "0.1.0"
 description = "Lightweight, dependency-free ARTM (Additive Regularization of Topic Models) implementation"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.13"
 dependencies = [
+    "en-core-web-sm",
+    "nltk>=3.9.2",
     "polars[rtcompat]>=1.36.1",
     "scipy>=1.16.3",
     "spacy>=3.8.11",
     "torch>=2.9.1",
     "torchvision>=0.24.1",
+    "numpy==2.3.0",
 ]
 
 [project.optional-dependencies]
@@ -39,6 +42,7 @@ torch = [
 torchvision = [
   { index = "pytorch-cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
+en-core-web-sm = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0.tar.gz" }
 
 [tool.hatch.build.targets.wheel]
 packages = ["artm_lib"]
