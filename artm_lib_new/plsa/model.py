@@ -123,60 +123,6 @@ class PLSA:
             top_words.append([vocab[i] for i in top_indices])
         return top_words
 
-    def fit_full(self, X: csr_matrix, max_iter: int = 100, tol: float = 1e-4):
-        """Классический EM на полной матрице."""
-        for iter in range(max_iter):
-            # E-step: вычисляем n_tw для всей матрицы
-            n_tw, theta = self._e_step_full(X)
-
-            # Сохраняем theta для последующего использования
-            self.theta = theta
-
-            # M-step: обновляем phi
-            old_phi = self.phi.copy()
-            self._m_step(n_tw)
-
-            if iter % (max_iter / 10) == 0:
-                print(f"{iter=}")
-
-            # Проверка сходимости
-            if np.linalg.norm(self.phi - old_phi) < tol:
-                print(f"Сошлось на итерации {iter}")
-                break
-
-    def _e_step_full(self, X: csr_matrix):
-        """Оптимизированный E-step для полной матрицы."""
-        D, V = X.shape
-        T = self.n_topics
-
-        # Вычисляем theta = X @ phi.T (нормированный)
-        unnorm_theta = X @ self.phi.T
-        theta = unnorm_theta / np.maximum(unnorm_theta.sum(axis=1, keepdims=True), 1e-12)
-
-        # Вычисляем n_tw = phi.T @ (X.multiply(theta_sum))
-        # Более эффективный способ:
-        n_tw = np.zeros((T, V))
-
-        # Используем sparse operations
-        for d in range(D):
-            start, end = X.indptr[d : d + 2]
-            if start == end:
-                continue
-            words = X.indices[start:end]
-            counts = X.data[start:end]
-            theta_d = theta[d]  # (T,)
-
-            # Векторизованное вычисление
-            phi_w = self.phi[:, words]  # (T, nnz)
-            denom = np.dot(theta_d, phi_w)  # (nnz,)
-            denom = np.maximum(denom, 1e-12)
-
-            # n_tdw = counts * (phi_w * theta_d[:, None]) / denom
-            n_tdw = counts[None, :] * phi_w * theta_d[:, None] / denom[None, :]
-            n_tw[:, words] += n_tdw
-
-        return n_tw, theta
-
     def score_perplexity(self, data_loader) -> float:
         """
         Вычисляет перплексию модели на данных из DataLoader.
@@ -259,3 +205,54 @@ class PLSA:
             total_words += np.sum(counts)
 
         return np.exp(-log_likelihood / total_words) if total_words > 0 else float("inf")
+
+    def fit_full(self, X: csr_matrix, max_iter: int = 100, tol: float = 1e-4):
+        """Классический EM на полной матрице."""
+        for iter in range(max_iter):
+            # E-step: вычисляем n_tw для всей матрицы
+            n_tw, theta = self._e_step_full(X)
+
+            # Сохраняем theta для последующего использования
+            self.theta = theta
+
+            # M-step: обновляем phi
+            old_phi = self.phi.copy()
+            self._m_step(n_tw)
+
+            # Проверка сходимости
+            if np.linalg.norm(self.phi - old_phi) < tol:
+                print(f"Сошлось на итерации {iter}")
+                break
+
+    def _e_step_full(self, X: csr_matrix):
+        """Оптимизированный E-step для полной матрицы."""
+        D, V = X.shape
+        T = self.n_topics
+
+        # Вычисляем theta = X @ phi.T (нормированный)
+        unnorm_theta = X @ self.phi.T
+        theta = unnorm_theta / np.maximum(unnorm_theta.sum(axis=1, keepdims=True), 1e-12)
+
+        # Вычисляем n_tw = phi.T @ (X.multiply(theta_sum))
+        # Более эффективный способ:
+        n_tw = np.zeros((T, V))
+
+        # Используем sparse operations
+        for d in range(D):
+            start, end = X.indptr[d : d + 2]
+            if start == end:
+                continue
+            words = X.indices[start:end]
+            counts = X.data[start:end]
+            theta_d = theta[d]  # (T,)
+
+            # Векторизованное вычисление
+            phi_w = self.phi[:, words]  # (T, nnz)
+            denom = np.dot(theta_d, phi_w)  # (nnz,)
+            denom = np.maximum(denom, 1e-12)
+
+            # n_tdw = counts * (phi_w * theta_d[:, None]) / denom
+            n_tdw = counts[None, :] * phi_w * theta_d[:, None] / denom[None, :]
+            n_tw[:, words] += n_tdw
+
+        return n_tw, theta

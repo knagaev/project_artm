@@ -1,19 +1,29 @@
-from torch.utils.data import DataLoader
 from scipy.sparse import vstack
+from torch.utils.data import DataLoader
 
+from artm_lib.config import tokenizer  # <-- всё настроено в одном месте!
 from artm_lib.data.collators import ARTMCollator
 from artm_lib.data.dataset import ARTMDatasetParquet
 from artm_lib.plsa.model import PLSA
-from artm_lib.preprocessing.tokenizer import simple_tokenizer
+
+# from artm_lib.preprocessing.tokenizer import simple_tokenizer
 from artm_lib.preprocessing.vocabulary import build_vocab_and_index_from_parquet
 
 # 1. Загрузка словаря
 parquet_dir = r".\artm_lib\data\parquets"
+"""
 token_to_id, doc_index = build_vocab_and_index_from_parquet(
     parquet_dir_str=parquet_dir, tokenizer=simple_tokenizer, min_df=5
 )
 V = len(token_to_id)
+"""
 
+token_to_id, doc_index = build_vocab_and_index_from_parquet(
+    parquet_dir_str=parquet_dir,
+    tokenizer=tokenizer,  # <-- наш улучшенный токенизатор
+    min_df=5,
+    max_df=0.95,
+)
 # 2. DataLoader
 dataset = ARTMDatasetParquet(
     doc_index=doc_index,
@@ -31,7 +41,7 @@ for _, bow in loader:
 X = vstack(all_bows)
 
 # 4. Обучение
-model = PLSA(n_topics=20, vocab_size=V, random_state=142)
+model = PLSA(n_topics=20, vocab_size=V, random_state=42)
 model.fit_full(X, max_iter=100)
 
 # 5. Оценка
