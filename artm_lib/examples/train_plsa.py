@@ -1,9 +1,11 @@
 from scipy.sparse import vstack
-from torch.utils.data import DataLoader
 
 from artm_lib.config import tokenizer
 from artm_lib.data.collators import ARTMCollator
 from artm_lib.data.dataset import ARTMDatasetParquet
+
+# from torch.utils.data import DataLoader
+from artm_lib.data.simple_loader import SimpleDataLoader
 from artm_lib.plsa.model import PLSA
 
 # from artm_lib.preprocessing.tokenizer import simple_tokenizer
@@ -31,9 +33,20 @@ dataset = ARTMDatasetParquet(
     text_column="Description",
     tokenizer=tokenizer,
 )
+
 loader_batch_size = 1000
+"""
 loader = DataLoader(
     dataset, batch_size=loader_batch_size, collate_fn=ARTMCollator(V), num_workers=0
+)
+"""
+
+loader = SimpleDataLoader(
+    dataset,
+    collate_fn=ARTMCollator(V),
+    batch_size=loader_batch_size,
+    shuffle=True,  # работает!
+    seed=42,  # опционально, для воспроизводимости
 )
 
 # 3. Сбор полной матрицы

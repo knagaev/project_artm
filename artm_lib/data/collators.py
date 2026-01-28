@@ -1,23 +1,22 @@
 # collators.py
 # Только коллаторы — ничего лишнего
-from scipy.sparse import csr_matrix
 import numpy as np
-from typing import List, Tuple, Any
+from scipy.sparse import csr_matrix
 
 
 class ARTMCollator:
     def __init__(self, vocab_size: int):
         self.vocab_size = vocab_size
 
-    def __call__(self, batch: List[Tuple[int, List[int]]]) -> Tuple[List[int], csr_matrix]:
+    def __call__(self, batch: list[tuple[int, list[int]]]) -> tuple[list[int], csr_matrix]:
         """
         Преобразует батч документов в разреженную BOW-матрицу с частотами.
 
         Args:
-            batch: List[(doc_id, List[token_id])]
+            batch: list[(doc_id, list[token_id])]
 
         Returns:
-            doc_ids: List[int] — идентификаторы документов в батче
+            doc_ids: list[int] — идентификаторы документов в батче
             bow_matrix: csr_matrix of shape (len(batch), vocab_size) — частотная матрица
         """
         doc_ids = [item[0] for item in batch]
