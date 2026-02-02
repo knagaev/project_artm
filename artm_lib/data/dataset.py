@@ -1,10 +1,11 @@
 from typing import Callable
 
 import polars as pl
-from torch.utils.data import Dataset
+
+# from torch.utils.data import Dataset
 
 
-class ARTMDatasetParquet(Dataset):
+class ARTMDatasetParquet:
     def __init__(
         self,
         doc_index: list[tuple[str, int]],

@@ -1,6 +1,8 @@
 from scipy.sparse import vstack
 
-from artm_lib.config import tokenizer
+from artm_lib.config import spacy_tokenizer as tokenizer  # spaCy-токенизатор
+
+# from artm_lib.config import tokenizer
 from artm_lib.data.collators import ARTMCollator
 from artm_lib.data.dataset import ARTMDatasetParquet
 

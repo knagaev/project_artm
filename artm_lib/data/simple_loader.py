@@ -5,7 +5,8 @@ Compatible with ARTMDatasetParquet and ARTMCollator.
 """
 
 import random
-from typing import Any, Callable, Optional, Iterator
+from collections.abc import Iterator
+from typing import Any, Callable, Optional
 
 from scipy.sparse import csr_matrix
 

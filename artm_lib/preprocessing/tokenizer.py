@@ -3,6 +3,12 @@ from typing import Callable, Optional
 
 from .pipeline import TextPreprocessor
 
+# Экспорт spaCy-токенизатора
+from .spacy_utils import create_spacy_tokenizer
+
+# Экспорт русского токенизатора
+# from .russian_utils import create_russian_tokenizer
+
 
 def make_tokenizer(
     preprocessor: Optional[TextPreprocessor] = None, min_token_length: int = 2

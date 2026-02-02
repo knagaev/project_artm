@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 from typing import Callable, List, Tuple
 import polars as pl
-import torch
+# import torch
 
 # from scipy.sparse import csr_matrix
 from scipy.sparse import coo_matrix
@@ -35,9 +35,7 @@ class ARTMCollator:
                 doc_indices.extend([i] * len(token_ids))
 
         if not all_tokens:
-            bow_matrix = coo_matrix(
-                (len(batch), self.vocab_size), dtype=np.int32
-            ).tocsr()
+            bow_matrix = coo_matrix((len(batch), self.vocab_size), dtype=np.int32).tocsr()
             return doc_ids, bow_matrix
 
         all_tokens = np.array(all_tokens, dtype=np.int32)
@@ -175,9 +173,7 @@ class ARTMDatasetParquet(torch.utils.data.Dataset):
     def _get_df(self, file_path: str):
         if self.cache_dataframes:
             if file_path not in self._df_cache:
-                self._df_cache[file_path] = pl.read_parquet(
-                    file_path, columns=[self.text_column]
-                )
+                self._df_cache[file_path] = pl.read_parquet(file_path, columns=[self.text_column])
             return self._df_cache[file_path]
         else:
             return pl.read_parquet(file_path, columns=[self.text_column])
