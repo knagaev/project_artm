@@ -19,6 +19,7 @@ dependencies = [
     "numpy==2.3.0",
     "scikit-learn>=1.8.0",
     "pymorphy2>=0.9.1",
+    "pandas>=2.3.3",
 ]
 
 [project.optional-dependencies]

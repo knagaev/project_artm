@@ -1,5 +1,5 @@
 # artm_lib/plsa/model.py
-from typing import Optional
+from typing import Optional, Any
 
 import numpy as np
 from scipy.sparse import csr_matrix
@@ -10,8 +10,8 @@ class PLSA:
         """
         Реализация pLSA (probabilistic Latent Semantic Analysis).
 
-        Параметры:
-        ----------
+        Parameters:
+        -----------
         n_topics : int
             Число тем T.
         vocab_size : int
@@ -26,38 +26,35 @@ class PLSA:
             np.random.seed(random_state)
 
         # Инициализация Phi: P(w | t) — shape (T, V)
-        self.phi: np.ndarray = np.random.rand(n_topics, vocab_size)
+        self.phi: np.ndarray = np.random.rand(n_topics, vocab_size).astype(np.float64)
         self.phi /= self.phi.sum(axis=1, keepdims=True)
-
-        # Theta будет вычисляться на лету (не храним глобально)
 
     def _e_step(self, bow: csr_matrix) -> tuple[np.ndarray, np.ndarray]:
         """
         E-step: вычисление P(t | d, w) для всех слов в документах.
 
-        Но так как мы не храним P(t | d, w) явно, вместо этого
-        вычисляем матрицу ожидаемых подсчётов: n_{dw} * P(t | d, w)
+        Returns:
+        --------
+        n_tw : np.ndarray, shape (T, V)
+            Ожидаемые подсчёты для обновления Phi.
+        expected_counts : np.ndarray, shape (D, T)
+            Ожидаемые подсчёты n_dw * P(t|d,w), суммированные по w.
         """
-        D: int
-        V: int
         D, V = bow.shape
-        T: int = self.n_topics
+        T = self.n_topics
 
-        # Вычисляем unnorm P(t | d) ~ sum_w n_dw * phi_tw
-        # Это приближение, но для M-step достаточно
-        unnorm_theta: np.ndarray = bow @ self.phi.T  # (D, T)
-        # Нормировка
+        if bow.dtype != np.float64:
+            bow = bow.astype(np.float64)
+
+        # Начальное приближение theta
+        unnorm_theta = bow @ self.phi.T  # (D, T)
         theta = unnorm_theta / np.maximum(unnorm_theta.sum(axis=1, keepdims=True), 1e-12)
-
-        # Теперь вычисляем P(t | d, w) ∝ phi_tw * theta_dt
-        # Но нам нужно только: n_{dw} * P(t | d, w)
-        # Для этого используем sparse operations
 
         # Подготовка
         doc_start = bow.indptr[:-1]
         doc_end = bow.indptr[1:]
-        expected_counts: np.ndarray = np.zeros((D, T))  # для Theta (опционально)
-        n_tw: np.ndarray = np.zeros((T, V))  # для обновления Phi
+        expected_counts = np.zeros((D, T), dtype=np.float64)
+        n_tw = np.zeros((T, V), dtype=np.float64)
 
         for d in range(D):
             start, end = doc_start[d], doc_end[d]
@@ -66,32 +63,26 @@ class PLSA:
             w_indices = bow.indices[start:end]
             n_dw = bow.data[start:end]
 
-            # theta_dt для документа d: (T,)
-            theta_d = theta[d]  # (T,)
+            theta_d = theta[d]
+            phi_tw = self.phi[:, w_indices]
 
-            # phi_tw для слов w: (T, nnz)
-            phi_tw = self.phi[:, w_indices]  # (T, nnz)
-
-            # P(t | d, w) ∝ phi_tw * theta_d[:, None] → (T, nnz)
+            # P(t | d, w) ∝ phi_tw * theta_d[:, None]
             unnorm_ptdw = phi_tw * theta_d[:, None]
-            # Нормировка по t
             ptdw = unnorm_ptdw / np.maximum(unnorm_ptdw.sum(axis=0, keepdims=True), 1e-12)
 
-            # Ожидаемые подсчёты: n_dw * P(t | d, w) → (T, nnz)
-            exp_counts = ptdw * n_dw  # broadcasting: (T, nnz)
+            # Ожидаемые подсчёты
+            exp_counts = ptdw * n_dw
 
-            # Агрегация в n_tw
+            # Агрегация
             for idx, w in enumerate(w_indices):
                 n_tw[:, w] += exp_counts[:, idx]
 
-            # (Опционально) агрегация в expected_counts
             expected_counts[d] = exp_counts.sum(axis=1)
 
         return n_tw, expected_counts
 
     def _m_step(self, n_tw: np.ndarray) -> None:
         """M-step: обновление Phi = P(w | t)"""
-        # Нормировка по словам для каждой темы
         self.phi = n_tw / np.maximum(n_tw.sum(axis=1, keepdims=True), 1e-12)
 
     def fit_batch(self, bow: csr_matrix) -> None:
@@ -99,23 +90,78 @@ class PLSA:
         n_tw, _ = self._e_step(bow)
         self._m_step(n_tw)
 
-    def fit(self, data_loader, n_epochs: int = 10) -> None:
-        """Полное обучение по DataLoader."""
+    def fit(
+        self,
+        data_loader: Any,
+        n_epochs: int = 10,
+        val_loader: Optional[Any] = None,
+        patience: Optional[int] = None,
+        min_delta: float = 1.0,
+        verbose: bool = True,
+    ) -> dict:
+        """
+        Полное обучение по DataLoader.
+        """
+        history = {"train_perplexity": [], "val_perplexity": []}
+
+        best_val_perp = float("inf")
+        patience_counter = 0
+        best_phi = None
+
         for epoch in range(n_epochs):
-            for batch_idx, (doc_ids, bow) in enumerate(data_loader):
+            # Обучение на всех батчах
+            for doc_ids, bow in data_loader:
                 self.fit_batch(bow)
-            print(f"Epoch {epoch + 1}/{n_epochs} completed")
+
+            # Оценка на обучающей выборке (через тот же метод, что и в fit_full)
+            train_perp = self.score_perplexity(data_loader)
+            history["train_perplexity"].append(train_perp)
+
+            if verbose:
+                print(f"Epoch {epoch + 1}/{n_epochs}: train_perplexity={train_perp:.2f}")
+
+            # Оценка на валидации
+            if val_loader is not None:
+                val_perp = self.score_perplexity(val_loader)
+                history["val_perplexity"].append(val_perp)
+
+                if verbose:
+                    print(f"  val_perplexity={val_perp:.2f}")
+
+                # Ранняя остановка
+                if patience is not None:
+                    if val_perp < best_val_perp - min_delta:
+                        best_val_perp = val_perp
+                        patience_counter = 0
+                        best_phi = self.phi.copy()
+                        if verbose:
+                            print(f"  (new best, saved)")
+                    else:
+                        patience_counter += 1
+                        if verbose:
+                            print(f"  (no improvement, patience {patience_counter}/{patience})")
+
+                    if patience_counter >= patience:
+                        if verbose:
+                            print(f"Early stopping at epoch {epoch + 1}")
+                        if best_phi is not None:
+                            self.phi = best_phi
+                        break
+
+        return history
 
     def transform(self, bow: csr_matrix) -> np.ndarray:
-        """Получить Theta = P(t | d) для новых документов."""
-        unnorm_theta = bow @ self.phi.T
-        theta = unnorm_theta / np.maximum(unnorm_theta.sum(axis=1, keepdims=True), 1e-12)
+        """
+        Получить Theta = P(t | d) для документов через E-step.
+        """
+        _, expected_counts = self._e_step(bow)
+        theta = expected_counts / np.maximum(expected_counts.sum(axis=1, keepdims=True), 1e-12)
         return theta
 
     def get_phi(self) -> np.ndarray:
         return self.phi.copy()
 
-    def get_top_words(self, vocab: list, top_n: int = 10) -> list:
+    def get_top_words(self, vocab: list[str], top_n: int = 10) -> list[list[str]]:
         """Получить топ-слова для каждой темы."""
         top_words = []
         for t in range(self.n_topics):
@@ -123,136 +169,136 @@ class PLSA:
             top_words.append([vocab[i] for i in top_indices])
         return top_words
 
-    def score_perplexity(self, data_loader) -> float:
+    def _compute_log_likelihood(self, bow: csr_matrix, theta: np.ndarray) -> tuple[float, int]:
         """
-        Вычисляет перплексию модели на данных из DataLoader.
-
-        Parameters:
-        -----------
-        data_loader : torch.utils.data.DataLoader
-            Должен возвращать (doc_ids, bow: csr_matrix)
-
-        Returns:
-        --------
-        perplexity : float
+        Вычисление лог-правдоподобия.
         """
-        total_log_likelihood = 0.0
+        D, V = bow.shape
+
+        if bow.dtype != np.float64:
+            bow = bow.astype(np.float64)
+
+        p_w_given_d = theta @ self.phi
+        p_w_given_d = np.maximum(p_w_given_d, 1e-12)
+
+        log_likelihood = np.float64(0.0)
+        total_words = 0
+
+        doc_start = bow.indptr[:-1]
+        doc_end = bow.indptr[1:]
+
+        for d in range(D):
+            start, end = doc_start[d], doc_end[d]
+            if start == end:
+                continue
+
+            w_indices = bow.indices[start:end]
+            n_dw = bow.data[start:end]
+            p_wd = p_w_given_d[d, w_indices]
+
+            log_likelihood += np.sum(n_dw * np.log(p_wd))
+            total_words += int(np.sum(n_dw))
+
+        return float(log_likelihood), total_words
+
+    def score_perplexity(self, data_loader: Any) -> float:
+        """
+        Вычисляет перплексию на данных из DataLoader.
+        ИСПОЛЬЗУЕТ transform() — единообразно с логикой оценки.
+        """
+        total_log_likelihood = np.float64(0.0)
         total_words = 0
 
         for doc_ids, bow in data_loader:
-            # bow: (D, V)
-            D, V = bow.shape
-
-            if D == 0:
+            if bow.shape[0] == 0:
                 continue
 
-            # Шаг 1: вычислить P(t | d) для всех документов в батче
-            unnorm_theta = bow @ self.phi.T  # (D, T)
-            theta = unnorm_theta / np.maximum(unnorm_theta.sum(axis=1, keepdims=True), 1e-12)
-
-            # Шаг 2: вычислить P(w | d) = sum_t P(w | t) * P(t | d)
-            # Результат: (D, V)
-            p_w_given_d = theta @ self.phi  # (D, T) @ (T, V) -> (D, V)
-
-            # Защита от log(0)
-            p_w_given_d = np.maximum(p_w_given_d, 1e-12)
-
-            # Шаг 3: вычислить лог-правдоподобие: sum_{d,w} n_dw * log P(w|d)
-            # Используем sparse: только ненулевые элементы
-            doc_start = bow.indptr[:-1]
-            doc_end = bow.indptr[1:]
-
-            for d in range(D):
-                start, end = doc_start[d], doc_end[d]
-                if start == end:
-                    continue
-
-                w_indices = bow.indices[start:end]
-                n_dw = bow.data[start:end]
-
-                # P(w | d) для этих слов
-                p_wd = p_w_given_d[d, w_indices]  # (nnz,)
-
-                # Лог-правдоподобие для документа d
-                log_likelihood_d = np.sum(n_dw * np.log(p_wd))
-                total_log_likelihood += log_likelihood_d
-                total_words += np.sum(n_dw)
+            # Используем transform() — тот же метод, что используется вне обучения
+            theta = self.transform(bow)
+            log_likelihood, words = self._compute_log_likelihood(bow, theta)
+            total_log_likelihood += log_likelihood
+            total_words += words
 
         if total_words == 0:
             return float("inf")
 
-        perplexity = np.exp(-total_log_likelihood / total_words)
-        return perplexity
+        return np.exp(-total_log_likelihood / total_words)
 
     def score_perplexity_from_matrix(self, X: csr_matrix) -> float:
-        """Более эффективная перплексия для полной матрицы."""
+        """Перплексия для полной матрицы (без DataLoader)."""
         theta = self.transform(X)
-        p_w_given_d = theta @ self.phi
-        p_w_given_d = np.maximum(p_w_given_d, 1e-12)
-
-        # Лог-правдоподобие через sparse
-        log_likelihood = 0.0
-        total_words = 0
-
-        for d in range(X.shape[0]):
-            start, end = X.indptr[d : d + 2]
-            if start == end:
-                continue
-            words = X.indices[start:end]
-            counts = X.data[start:end]
-            p_wd = p_w_given_d[d, words]
-            log_likelihood += np.sum(counts * np.log(p_wd))
-            total_words += np.sum(counts)
-
+        log_likelihood, total_words = self._compute_log_likelihood(X, theta)
         return np.exp(-log_likelihood / total_words) if total_words > 0 else float("inf")
 
-    def fit_full(self, X: csr_matrix, max_iter: int = 100, tol: float = 1e-4):
-        """Классический EM на полной матрице."""
+    def fit_full(
+        self,
+        X: csr_matrix,
+        max_iter: int = 100,
+        tol: float = 1e-4,
+        verbose: bool = True,
+    ) -> dict:
+        """
+        Классический EM на полной матрице без батчей.
+
+        ИСПРАВЛЕНО: Теперь использует transform() для согласованности с fit().
+        """
+        history = {"train_perplexity": []}
+
         for iter in range(max_iter):
-            # E-step: вычисляем n_tw для всей матрицы
-            n_tw, theta = self._e_step_full(X)
+            # E-step с получением expected_counts
+            n_tw, expected_counts = self._e_step_full(X)
 
-            # Сохраняем theta для последующего использования
-            self.theta = theta
-
-            # M-step: обновляем phi
+            # M-step
             old_phi = self.phi.copy()
             self._m_step(n_tw)
 
-            # Проверка сходимости
-            if np.linalg.norm(self.phi - old_phi) < tol:
-                print(f"Сошлось на итерации {iter}")
+            diff = np.linalg.norm(self.phi - old_phi)
+
+            # ИСПРАВЛЕНО: Используем transform() вместо прямого вычисления из expected_counts
+            # Это гарантирует единообразие с score_perplexity()
+            theta = self.transform(X)
+            log_lik, n_words = self._compute_log_likelihood(X, theta)
+            perp = np.exp(-log_lik / n_words) if n_words > 0 else float("inf")
+            history["train_perplexity"].append(perp)
+
+            if verbose and iter % 10 == 0:
+                print(f"Iter {iter}: perplexity={perp:.2f}, diff={diff:.6f}")
+
+            if diff < tol:
+                if verbose:
+                    print(f"Converged at iteration {iter}")
                 break
 
-    def _e_step_full(self, X: csr_matrix):
+        return history
+
+    def _e_step_full(self, X: csr_matrix) -> tuple[np.ndarray, np.ndarray]:
         """Оптимизированный E-step для полной матрицы."""
         D, V = X.shape
         T = self.n_topics
 
-        # Вычисляем theta = X @ phi.T (нормированный)
+        if X.dtype != np.float64:
+            X = X.astype(np.float64)
+
         unnorm_theta = X @ self.phi.T
         theta = unnorm_theta / np.maximum(unnorm_theta.sum(axis=1, keepdims=True), 1e-12)
 
-        # Вычисляем n_tw = phi.T @ (X.multiply(theta_sum))
-        # Более эффективный способ:
-        n_tw = np.zeros((T, V))
+        n_tw = np.zeros((T, V), dtype=np.float64)
+        expected_counts = np.zeros((D, T), dtype=np.float64)
 
-        # Используем sparse operations
         for d in range(D):
             start, end = X.indptr[d : d + 2]
             if start == end:
                 continue
             words = X.indices[start:end]
             counts = X.data[start:end]
-            theta_d = theta[d]  # (T,)
+            theta_d = theta[d]
 
-            # Векторизованное вычисление
-            phi_w = self.phi[:, words]  # (T, nnz)
-            denom = np.dot(theta_d, phi_w)  # (nnz,)
-            denom = np.maximum(denom, 1e-12)
+            phi_w = self.phi[:, words]
+            unnorm_ptdw = phi_w * theta_d[:, None]
+            ptdw = unnorm_ptdw / np.maximum(unnorm_ptdw.sum(axis=0, keepdims=True), 1e-12)
 
-            # n_tdw = counts * (phi_w * theta_d[:, None]) / denom
-            n_tdw = counts[None, :] * phi_w * theta_d[:, None] / denom[None, :]
-            n_tw[:, words] += n_tdw
+            exp_counts = ptdw * counts
+            n_tw[:, words] += exp_counts
+            expected_counts[d] = exp_counts.sum(axis=1)
 
-        return n_tw, theta
+        return n_tw, expected_counts
