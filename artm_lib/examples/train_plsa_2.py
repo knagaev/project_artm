@@ -110,7 +110,7 @@ val_loader = SimpleDataLoader(
 # 4. Обучение модели
 model = PLSA(n_topics=20, vocab_size=vocab_size, random_state=42)
 
-history = model.fit(
+history = model.fit_full(
     train_loader,
     n_epochs=100,
     val_loader=val_loader,

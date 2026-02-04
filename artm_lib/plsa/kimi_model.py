@@ -3,7 +3,7 @@ import numpy as np
 
 # import torch
 # from scipy.special import logsumexp
-from torch.utils.data import DataLoader, Dataset
+# from torch.utils.data import DataLoader, Dataset
 
 
 # ---------- 1. Dataset, который возвращает (doc_id, word_id, count) ----------

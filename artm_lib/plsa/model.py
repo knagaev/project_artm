@@ -1,8 +1,8 @@
 # artm_lib/plsa/model.py
-from typing import Optional, Any
+from typing import Any, Optional
 
 import numpy as np
-from scipy.sparse import csr_matrix
+from scipy.sparse import csr_matrix, vstack
 
 
 class PLSA:
@@ -249,38 +249,124 @@ class PLSA:
 
     def fit_full(
         self,
-        X: csr_matrix,
-        max_iter: int = 100,
-        tol: float = 1e-4,
+        train_loader: Any,
+        n_epochs: int = 10,
+        val_loader: Optional[Any] = None,
+        patience: Optional[int] = None,
+        min_delta: float = 1.0,
         verbose: bool = True,
+        tol=1e-6,
     ) -> dict:
         """
-        Классический EM на полной матрице без батчей.
-        """
-        history = {"train_perplexity": []}
+        Классический EM на полной матрице с поддержкой валидации.
 
-        for iter in range(max_iter):
-            # E-step
-            n_tw, expected_counts = self._e_step_full(X)
+        Parameters:
+        -----------
+        X : csr_matrix
+            Обучающая матрица (документы × слова)
+        max_iter : int
+            Максимальное число итераций
+        tol : float
+            Порог сходимости по изменению phi
+        X_val : csr_matrix, optional
+            Валидационная матрица
+        patience : int, optional
+            Количество итераций без улучшения до ранней остановки
+        min_delta : float
+            Минимальное улучшение перплексии для сброса patience
+        verbose : bool
+            Вывод прогресса
+
+        Returns:
+        --------
+        history : dict
+            Словарь с историей обучения
+        """
+
+        # === Сбор полной обучающей матрицы ===
+        if verbose:
+            print("Сбор полной обучающей матрицы...")
+        all_bows_train = []
+        for doc_ids, bow in train_loader:
+            all_bows_train.append(bow)
+        X_train = vstack(all_bows_train)
+
+        # === Сбор полной валидационной матрицы (если есть) ===
+        X_val = None
+        if val_loader is not None:
+            if verbose:
+                print("Сбор полной валидационной матрицы...")
+            all_bows_val = []
+            for doc_ids, bow in val_loader:
+                all_bows_val.append(bow)
+            X_val = vstack(all_bows_val)
+
+        if verbose:
+            print(f"Обучающая матрица: {X_train.shape}")
+            if X_val is not None:
+                print(f"Валидационная матрица: {X_val.shape}")
+
+        history = {"train_perplexity": [], "val_perplexity": [] if X_val is not None else None}
+
+        best_val_perp: float = float("inf")
+        patience_counter = 0
+        best_phi = None
+
+        for iter in range(n_epochs):
+            # E-step с получением expected_counts
+            n_tw, expected_counts = self._e_step_full(X_train)
+
+            # Сохраняем старую phi для проверки сходимости
+            old_phi = self.phi.copy()
 
             # M-step
-            old_phi = self.phi.copy()
             self._m_step(n_tw)
 
+            # Вычисление перплексии на обучении
+            train_perp: float = self.score_perplexity_from_matrix(X_train)
+            history["train_perplexity"].append(train_perp)
+
+            # Проверка сходимости по изменению параметров
             diff = np.linalg.norm(self.phi - old_phi)
 
-            # Оценка: используем transform() для согласованности
-            theta = self.transform(X)
-            log_lik, n_words = self._compute_log_likelihood(X, theta)
-            perp = np.exp(-log_lik / n_words) if n_words > 0 else float("inf")
-            history["train_perplexity"].append(perp)
+            # Оценка на валидации (если есть)
+            val_perp = None
+            if X_val is not None:
+                val_perp: float = self.score_perplexity_from_matrix(X_val)
+                history["val_perplexity"].append(val_perp)
 
-            if verbose and iter % 10 == 0:
-                print(f"Iter {iter}: perplexity={perp:.2f}, diff={diff:.6f}")
+            # Вывод прогресса
+            if verbose and (iter % 10 == 0 or iter == n_epochs - 1):
+                msg = f"Iter {iter}: train_perp={train_perp:.2f}"
+                if val_perp is not None:
+                    msg += f", val_perp={val_perp:.2f}"
+                msg += f", diff={diff:.6f}"
+                print(msg)
 
+            # Ранняя остановка (только если есть валидация)
+            if X_val is not None and patience is not None:
+                if val_perp < best_val_perp - min_delta:
+                    best_val_perp = val_perp
+                    patience_counter = 0
+                    best_phi = self.phi.copy()
+                    if verbose:
+                        print(f"  (new best validation perplexity, saved)")
+                else:
+                    patience_counter += 1
+                    if verbose:
+                        print(f"  (no improvement, patience {patience_counter}/{patience})")
+
+                if patience_counter >= patience:
+                    if verbose:
+                        print(f"Early stopping at iteration {iter}")
+                    if best_phi is not None:
+                        self.phi = best_phi
+                    break
+
+            # Проверка сходимости по параметрам
             if diff < tol:
                 if verbose:
-                    print(f"Converged at iteration {iter}")
+                    print(f"Converged at iteration {iter} (diff < {tol})")
                 break
 
         return history
