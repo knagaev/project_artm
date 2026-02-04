@@ -83,10 +83,16 @@ class PLSA:
 
     def _m_step(self, n_tw: np.ndarray) -> None:
         """M-step: обновление Phi = P(w | t)"""
-        self.phi = n_tw / np.maximum(n_tw.sum(axis=1, keepdims=True), 1e-12)
+        # Добавляем сглаживание для численной стабильности
+        n_tw = np.maximum(n_tw, 1e-12)
+        self.phi = n_tw / n_tw.sum(axis=1, keepdims=True)
 
     def fit_batch(self, bow: csr_matrix) -> None:
-        """Одна итерация EM на батче."""
+        """
+        Одна итерация EM на батче.
+        ПРИМЕЧАНИЕ: Это online-обучение, не эквивалентно полному EM!
+        Используйте fit() для правильного батчевого EM.
+        """
         n_tw, _ = self._e_step(bow)
         self._m_step(n_tw)
 
@@ -100,7 +106,9 @@ class PLSA:
         verbose: bool = True,
     ) -> dict:
         """
-        Полное обучение по DataLoader.
+        Правильное батчевое обучение pLSA: E-step по всем батчам, затем M-step.
+
+        ВАЖНО: Все батчи в эпохе используют ОДНУ И ТУ ЖЕ phi (до M-step).
         """
         history = {"train_perplexity": [], "val_perplexity": []}
 
@@ -109,16 +117,27 @@ class PLSA:
         best_phi = None
 
         for epoch in range(n_epochs):
-            # Обучение на всех батчах
-            for doc_ids, bow in data_loader:
-                self.fit_batch(bow)
+            # === E-step: собираем статистику со ВСЕХ батчей ===
+            n_tw_total = np.zeros((self.n_topics, self.vocab_size), dtype=np.float64)
+            total_docs = 0
 
-            # Оценка на обучающей выборке (через тот же метод, что и в fit_full)
+            for doc_ids, bow in data_loader:
+                # E-step для батча с ТЕКУЩЕЙ phi (не обновляем!)
+                n_tw_batch, _ = self._e_step(bow)
+                n_tw_total += n_tw_batch
+                total_docs += bow.shape[0]
+
+            # === M-step: один раз обновляем phi ===
+            self._m_step(n_tw_total)
+
+            # Оценка
             train_perp = self.score_perplexity(data_loader)
             history["train_perplexity"].append(train_perp)
 
             if verbose:
-                print(f"Epoch {epoch + 1}/{n_epochs}: train_perplexity={train_perp:.2f}")
+                print(
+                    f"Epoch {epoch + 1}/{n_epochs}: train_perplexity={train_perp:.2f}, docs={total_docs}"
+                )
 
             # Оценка на валидации
             if val_loader is not None:
@@ -204,7 +223,6 @@ class PLSA:
     def score_perplexity(self, data_loader: Any) -> float:
         """
         Вычисляет перплексию на данных из DataLoader.
-        ИСПОЛЬЗУЕТ transform() — единообразно с логикой оценки.
         """
         total_log_likelihood = np.float64(0.0)
         total_words = 0
@@ -213,7 +231,6 @@ class PLSA:
             if bow.shape[0] == 0:
                 continue
 
-            # Используем transform() — тот же метод, что используется вне обучения
             theta = self.transform(bow)
             log_likelihood, words = self._compute_log_likelihood(bow, theta)
             total_log_likelihood += log_likelihood
@@ -239,13 +256,11 @@ class PLSA:
     ) -> dict:
         """
         Классический EM на полной матрице без батчей.
-
-        ИСПРАВЛЕНО: Теперь использует transform() для согласованности с fit().
         """
         history = {"train_perplexity": []}
 
         for iter in range(max_iter):
-            # E-step с получением expected_counts
+            # E-step
             n_tw, expected_counts = self._e_step_full(X)
 
             # M-step
@@ -254,8 +269,7 @@ class PLSA:
 
             diff = np.linalg.norm(self.phi - old_phi)
 
-            # ИСПРАВЛЕНО: Используем transform() вместо прямого вычисления из expected_counts
-            # Это гарантирует единообразие с score_perplexity()
+            # Оценка: используем transform() для согласованности
             theta = self.transform(X)
             log_lik, n_words = self._compute_log_likelihood(X, theta)
             perp = np.exp(-log_lik / n_words) if n_words > 0 else float("inf")
