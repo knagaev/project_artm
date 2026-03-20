@@ -1,0 +1,51 @@
+[project]
+name = "cartm"
+version = "0.1.0"
+description = "Topic modelling with attention-based approach"
+authors = [{ name = "Diyakov Ilya", email = "s02210378@gse.cs.msu.ru" }]
+requires-python = ">=3.10,<4"
+readme = "README.md"
+license = "MIT"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+]
+dependencies = [
+    "nltk>=3.9.1,<4",
+    "jax>=0.4.38,<0.5",
+]
+
+[project.scripts]
+download-nltk-data = "src.install:download_nltk_data"
+
+[dependency-groups]
+dev = [
+    "pandas>=2.2.3,<3",
+    "seaborn>=0.13.2,<0.14",
+    "ipykernel>=6.29.5,<7",
+    "scikit-learn>=1.6.1,<2",
+    "numpy>=2.2.2,<3",
+]
+test = [
+    "pytest>=8.3.4,<9",
+    "flake8>=7.1.1,<8",
+    "pylint>=3.3.4,<4",
+    "numpy>=2.2.2,<3",
+]
+examples = [
+    "seaborn>=0.13.2,<0.14",
+    "ipykernel>=6.29.5,<7",
+    "scikit-learn>=1.6.1,<2",
+    "numpy>=2.2.2,<3",
+]
+
+[tool.uv]
+default-groups = "all"
+
+[build-system]
+requires = ["uv_build>=0.9.13,<0.10.0"]
+build-backend = "uv_build"
