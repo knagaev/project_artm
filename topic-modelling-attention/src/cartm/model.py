@@ -122,7 +122,8 @@ class ContextTopicModel():
         norm = x.sum(axis=0)
         x = jnp.where(norm > self._eps, x / norm, jnp.zeros_like(x))
         return x
-
+    
+    '''
     @partial(jax.jit, static_argnums=(0, 1))
     def _get_context_weights_1d(self, gamma: float) -> jax.Array:
         # w_i = gamma * (1 - gamma)**i
@@ -135,21 +136,26 @@ class ContextTopicModel():
             self_context_weight,
             suffix_context_weights,
         ])
-        return jnp.array(context_weights)  # (2C + 1, )'''
+        return jnp.array(context_weights)  # (2C + 1, )
+    '''
     
     @partial(jax.jit, static_argnums=(0, 1))
     def _get_context_weights_1d(self, gamma: float) -> np.ndarray:
         # w_i = gamma * (1 - gamma)**i
-        suffix_context_weights = np.cumprod(np.full(self.ctx_len, (1 - gamma))) * gamma  # (C, )
+        # правая половина весов контекста размером C
+        suffix_context_weights = np.cumprod(np.full(self.ctx_len, (1 - gamma))) * gamma  # (C, ) 
+        # заполняем ndarray длины self.ctx_len значениями (1 - gamma)
+        # кумулятивное произведение [1, 2, 3, 4, 5] -> [1, 2, 6, 24, 120]
         #jax.debug.print("{suffix_context_weights}", suffix_context_weights=suffix_context_weights)
-        prefix_context_weights = suffix_context_weights[::-1]  # (C, )
-        self_context_weight = np.array([self._gamma * self._self_aware_context])
+        prefix_context_weights = suffix_context_weights[::-1]  # (C, ) левая половина - перевернутая правая
+        self_context_weight = np.array([self._gamma * self._self_aware_context]) # массив из одного элемента _gamma или 0
         context_weights = np.concatenate([
             prefix_context_weights,
             self_context_weight,
             suffix_context_weights,
         ])
-        return context_weights  # (2C + 1, )
+        # собранный массив типа ctx_len = 3, gamma = 0.6 -> [0.0384, 0.096 , 0.24  , 0.    , 0.24  , 0.096 , 0.0384]
+        return context_weights  # (2C + 1, ) 
 
     @partial(jax.jit, static_argnums=0)
     def _get_context_weights_2d(
@@ -161,6 +167,7 @@ class ContextTopicModel():
         batch_size = batch.shape[0]
 
         # True where to attend
+        # Заготовка - все единицы в матрице, размерность (батч с +- окно контекста, длина окна контекста)
         attn_matrix = jnp.ones(
             shape=(batch_size + self.ctx_len * 2, self.ctx_len * 2 + 1),
             dtype=bool,
@@ -260,6 +267,7 @@ class ContextTopicModel():
         stacked_tensor = jax.vmap(shift_batch)(shifts).transpose(1, 0, 2)
         return stacked_tensor  # (I, 2C + 1, T) (длина батча, длина контекста, количество топиков)
 
+    # для расчета на Е-шаге - Фи умноженная element-wise на n_t (частотность токенов), нормализованная и транспонированная
     @partial(jax.jit, static_argnums=0)
     def _calc_phi_hatch(self, *, phi: jax.Array, n_t: jax.Array) -> jax.Array:
         return self._norm(phi.T * n_t[:, None]).T  # (W, T)
@@ -269,12 +277,12 @@ class ContextTopicModel():
             self,
             *,
             phi_hatch: jax.Array,
-            batch: jax.Array,
+            batch: jax.Array,      # это data - массив токенов
             ctx_bounds: jax.Array,
     ) -> jax.Array:
-        phi_it_hatch = jnp.take_along_axis(
+        phi_it_hatch = jnp.take_along_axis( # из новой Фи (W, T) (умноженной element-wise на n_t (частотность токенов), нормализованная и транспонированная)
             phi_hatch,
-            indices=batch[:, None],
+            indices=batch[:, None],         # получаем только строки
             axis=0,
         )  # (I, T)
         phi_it_hatch_with_context = self._get_context_tensor(batch=phi_it_hatch)  # (I, 2C + 1, T) # размножение Фи по количеству токенов в батче - для каждого окна контекста
@@ -353,8 +361,8 @@ class ContextTopicModel():
     def _step(
             self,
             *,
-            batch: jax.Array,
-            ctx_bounds: jax.Array,
+            batch: jax.Array,   # это data - массив токенов
+            ctx_bounds: jax.Array,  # это границы документов (индексы начала документа)
             phi: jax.Array,
             n_t: jax.Array,
             grad_reg: Callable,
@@ -397,9 +405,9 @@ class ContextTopicModel():
             batches: Iterable[tuple[jax.Array, jax.Array]], # контейнер с парами (батч, границы окон контекстов в батче)
             phi: jax.Array,                                 # копия Фи
             n_t: jax.Array,                                 # частотная псевдоматрица топиков
-            grad_reg: Callable,                             # функциии градиентов 
+            grad_reg: Callable,                             # функции градиентов
             lr: float,
-    ) -> tuple[jax.Array, jax.Array, jax.Array]:
+    ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
         phi_new = phi.copy()    # копия Фи
         n_t_new = n_t.copy()    # копия частотной псевдоматрицы топиков n_t
         phi_it = []             #
@@ -441,6 +449,7 @@ class ContextTopicModel():
                 or iterable returning tuples (data_batch, ctx_bounds_batch).
             ctx_bounds: array of shape (B, ), containing bounds for context. Words
                 beyond the bound are ignored in the context.
+                Это границы документов - массив индексов начала следующего документа
             lr: coefficient for updating phi in online mode:
                 phi = phi_prev * (1 - lr) + phi_new * lr
             max_iter: max number of iterations.
@@ -454,7 +463,7 @@ class ContextTopicModel():
         print('start model')
         begin_time = time.time()
         key = jax.random.key(seed)
-        self.phi = jax.random.uniform(  # инициализация равномерным распределением матрифы Фи размерность (W,T)
+        self.phi = jax.random.uniform(  # инициализация равномерным распределением матрицы Фи размерность (W,T)
             key=key,
             shape=(self.vocab_size, self.n_topics),
         )  # (W, T)
