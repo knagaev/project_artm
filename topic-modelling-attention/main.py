@@ -12,14 +12,17 @@ from cartm.preprocessing import DatasetPreprocessor
 
 syspath.insert(1, r'D:\ARTM\topic-modelling-attention\src')
 
-data = fetch_20newsgroups(data_home='./data/', subset='all').data
+#data = fetch_20newsgroups(data_home='./data/', subset='all').data
+with open('./data/test_data.txt') as f:
+    data = f.readlines()
+
 preprocessor = DatasetPreprocessor()
 tokenized_data, document_bounds = preprocessor.fit_transform(data)
 
 topic_model = ContextTopicModel(
     vocab_size=len(preprocessor.vocabulary),
     ctx_len=10,
-    n_topics=20
+    n_topics=10
 )
 
 topic_model.fit(

@@ -167,63 +167,190 @@ class ContextTopicModel():
         batch_size = batch.shape[0]
 
         # True where to attend
-        # Заготовка - все единицы в матрице, размерность (батч с +- окно контекста, длина окна контекста)
+        # Заготовка - все единицы в матрице, 
+        # размерность (батч(массив токенов) с +- окно контекста Х длина окна контекста)
         attn_matrix = jnp.ones(
             shape=(batch_size + self.ctx_len * 2, self.ctx_len * 2 + 1),
             dtype=bool,
         )  # (I + 2C, 2C + 1)
 
         # prefix attention mask (ignore words from the previous document in context)
+        # индексы начала документов, сдвинутые вправо на контекст (B - 1, )
         prefix_bounds = attn_bounds[:-1] + self.ctx_len  # (B, )
 
+        # маска игнорирования префиксов - квадратная матрица (длина контекста Х длина контекста) из True
         ignored_mask_prefix = jnp.ones((self.ctx_len, self.ctx_len), dtype=bool)  # (C, C)
+        # triu - правый нижний под побочной диагональю остаются, остальные в False
+        # True в правом нижнем углу под диагональю
+        # [[False, False, False],
+        #  [False, False,  True],
+        #  [False,  True,  True]]
         ignored_mask_prefix = jnp.rot90(~jnp.triu(ignored_mask_prefix))  # (C, C)
         # for broadcasting
+        # повторение ignored_mask_prefix по вертикали по количеству документов (для каждого) 
         ignored_mask_prefix = jnp.tile(
             ignored_mask_prefix,
             reps=len(prefix_bounds),
         ).T  # (B * C, C)
 
         # context (row) indices where attention mask is needed (the beginning of a new document)
+        # матрица из единиц размером (кол-во документов Х длина контекста)
         shifts = jnp.ones((len(prefix_bounds), self.ctx_len), dtype=int)  # (B, C)
+        # устанавливаем в первый столбец индексы начала документа, сдвинутые вправо на контекст
         shifts = shifts.at[:, 0].set(prefix_bounds)
+        # в каждой строке прогрессия "+1" от (индекса начала документа, сдвинутого вправо на контекст)
         shifts = jnp.cumsum(shifts, axis=1)
+        # разворот в один столбец высотой (количество документов * контекст)
         shifts = shifts.reshape(-1, 1)  # (B * C, 1)
+        # получается столбец типа (если границы документов [ 0  5  9 16 20] и ctx_len=3)
+        # [ 3  4  5  8  9 10 12 13 14 19 20 21]
+        # [ 0  5  9 16 20] -> [ 3  8  12 19] -> [ 3  4  5 | 8  9 10 | 12 13 14 | 19 20 21]
+        # пока что это очень странно 
 
         # words (column) indices in prefix context
+        # массив от 0 до контекста [0, 1, ..., ctx_len - 1]
         prefix_columns = jnp.arange(self.ctx_len)  # (C, )
 
+        # по вертикали индексы начала документа, сдвинутые вправо на контекст
+        # по горизонтали индексы [0, 1, ..., ctx_len - 1]
+        # записываем маску игнорирования
         attn_matrix = attn_matrix.at[shifts, prefix_columns].set(ignored_mask_prefix)
 
         # suffix attention (ignore words from the next document in context)
+        # индексы начала следующего документа
         suffix_bounds = attn_bounds[1:]  # (B, )
 
+        # маска игнорирования префиксов - квадратная матрица (длина контекста Х длина контекста) из True
         ignored_mask_suffix = jnp.ones((self.ctx_len, self.ctx_len), dtype=bool)  # (C, C)
+        # tril - левый верхний треугольник над побочной диагональю остаются, остальные в False
+        # True в левом верхнем углу над диагональю
+        # [[ True  True False]
+        #  [ True False False]
+        #  [False False False]]
         ignored_mask_suffix = jnp.rot90(~jnp.tril(ignored_mask_suffix))  # (C, C)
         # for broadcasting
+        # повторение ignored_mask_prefix по вертикали по количеству документов (для каждого) 
         ignored_mask_suffix = jnp.tile(
             ignored_mask_suffix,
             reps=len(suffix_bounds),
         ).T  # (B * C, C)
 
         # context (row) indices where attention mask is needed (the end of a document)
+        # матрица из единиц размером (кол-во документов Х длина контекста)
         shifts = jnp.ones((len(suffix_bounds), self.ctx_len), dtype=int)  # (B, C)
+        # устанавливаем в первый столбец индексы начала следующего документа (конец текущего + 1)
         shifts = shifts.at[:, 0].set(suffix_bounds)
+        # в каждой строке прогрессия "+1" от (индекса начала документа, сдвинутого вправо на контекст)
         shifts = jnp.cumsum(shifts, axis=1)
+        # разворот в один столбец высотой (количество документов * контекст)
         shifts = shifts.reshape(-1, 1)  # (B * C, 1)
+        # получается столбец типа (если границы документов [ 0  5  9 16 20] и ctx_len=3)
+        # [ 5  6  7  9 10 11 16 17 18 20 21 22]
+        # [ 0  5  9 16 20] -> [ 5  9 16 20] -> [ 5  6  7 | 9 10 11 | 16 17 18 | 20 21 22]
+        # пока что это очень странно 
 
         # words (column) indices in suffix context
+        # массив от ctx_len + 1 до 2 * ctx_len + 1 
+        # для ctx_len=3 [4 5 6]
         suffix_columns = jnp.arange(self.ctx_len + 1, self.ctx_len * 2 + 1)  # (C, )
 
         # apply mask in reverse order
+        # если границы документов [ 0  5  9 16 20] и ctx_len=3
+        # shifts[::-1] -> [22, 21, 20, 18, 17, 16, 11, 10,  9,  7,  6,  5]
+        # suffix_columns - последние ctx_len колонки
+        # например для строк [9,  7,  6,  5] получаются три последние колонки 
+        # [ True,  True, False] 9
+        # [False, False, False] 7
+        # [ True, False, False] 6 
+        # [ True,  True, False] 5
+        # надо разобраться 
         attn_matrix = attn_matrix.at[shifts[::-1], suffix_columns].set(ignored_mask_suffix[::-1])
 
         # remove padding
-        attn_matrix = attn_matrix[self.ctx_len:-self.ctx_len]  # (I, 2C + 1)
+        # убираем верхние и нижние ctx_len строки
+        attn_matrix = attn_matrix[self.ctx_len: -self.ctx_len]  # (I, 2C + 1)
+
+        ''' Получаем 
+            [ 0  5  9 16 20]
+            [(0, Array([False, False, False,  True,  True,  True,  True], dtype=bool)),
+            (1, Array([False, False,  True,  True,  True,  True,  True], dtype=bool)),
+            (2, Array([False,  True,  True,  True,  True,  True, False], dtype=bool)),
+            (3, Array([ True,  True,  True,  True,  True, False, False], dtype=bool)),
+            (4, Array([ True,  True,  True,  True, False, False, False], dtype=bool)),
+
+            (5, Array([False, False, False,  True,  True,  True,  True], dtype=bool)),
+            (6, Array([False, False,  True,  True,  True,  True, False], dtype=bool)),
+            (7, Array([False,  True,  True,  True,  True, False, False], dtype=bool)),
+            (8, Array([ True,  True,  True,  True, False, False, False], dtype=bool)),
+
+            (9, Array([False, False, False,  True,  True,  True,  True], dtype=bool)),
+            (10, Array([False, False,  True,  True,  True,  True,  True], dtype=bool)),
+            (11, Array([False,  True,  True,  True,  True,  True,  True], dtype=bool)),
+            (12, Array([ True,  True,  True,  True,  True,  True,  True], dtype=bool)),
+            (13, Array([ True,  True,  True,  True,  True,  True, False], dtype=bool)),
+            (14, Array([ True,  True,  True,  True,  True, False, False], dtype=bool)),
+            (15, Array([ True,  True,  True,  True, False, False, False], dtype=bool)),
+
+            (16, Array([False, False, False,  True,  True,  True,  True], dtype=bool)),
+            (17, Array([False, False,  True,  True,  True,  True, False], dtype=bool)),
+            (18, Array([False,  True,  True,  True,  True, False, False], dtype=bool)),
+            (19, Array([ True,  True,  True,  True, False, False, False], dtype=bool))]
+        '''
 
         # calculate context weights with respect to attention and normalize weights
         context_matrix = self._context_weights_1d * attn_matrix  # (I, 2C + 1)
+        '''
+        [(0,  Array([0.    , 0.    , 0.    , 0.    , 0.24  , 0.096 , 0.0384], dtype=float32)),
+        (1,  Array([0.    , 0.    , 0.24  , 0.    , 0.24  , 0.096 , 0.0384], dtype=float32)),
+        (2, Array([0.   , 0.096, 0.24 , 0.   , 0.24 , 0.096, 0.   ], dtype=float32)),
+        (3,  Array([0.0384, 0.096 , 0.24  , 0.    , 0.24  , 0.    , 0.    ], dtype=float32)),
+        (4,  Array([0.0384, 0.096 , 0.24  , 0.    , 0.    , 0.    , 0.    ], dtype=float32)),
+
+        (5,  Array([0.    , 0.    , 0.    , 0.    , 0.24  , 0.096 , 0.0384], dtype=float32)),
+        (6, Array([0.   , 0.   , 0.24 , 0.   , 0.24 , 0.096, 0.   ], dtype=float32)),
+        (7, Array([0.   , 0.096, 0.24 , 0.   , 0.24 , 0.   , 0.   ], dtype=float32)),
+        (8,  Array([0.0384, 0.096 , 0.24  , 0.    , 0.    , 0.    , 0.    ], dtype=float32)),
+
+        (9,  Array([0.    , 0.    , 0.    , 0.    , 0.24  , 0.096 , 0.0384], dtype=float32)),
+        (10,  Array([0.    , 0.    , 0.24  , 0.    , 0.24  , 0.096 , 0.0384], dtype=float32)),
+        (11,  Array([0.    , 0.096 , 0.24  , 0.    , 0.24  , 0.096 , 0.0384], dtype=float32)),
+        (12,  Array([0.0384, 0.096 , 0.24  , 0.    , 0.24  , 0.096 , 0.0384], dtype=float32)),
+        (13,  Array([0.0384, 0.096 , 0.24  , 0.    , 0.24  , 0.096 , 0.    ], dtype=float32)),
+        (14,  Array([0.0384, 0.096 , 0.24  , 0.    , 0.24  , 0.    , 0.    ], dtype=float32)),
+        (15,  Array([0.0384, 0.096 , 0.24  , 0.    , 0.    , 0.    , 0.    ], dtype=float32)),
+
+        (16,  Array([0.    , 0.    , 0.    , 0.    , 0.24  , 0.096 , 0.0384], dtype=float32)),
+        (17, Array([0.   , 0.   , 0.24 , 0.   , 0.24 , 0.096, 0.   ], dtype=float32)),
+        (18, Array([0.   , 0.096, 0.24 , 0.   , 0.24 , 0.   , 0.   ], dtype=float32)),
+        (19,  Array([0.0384, 0.096 , 0.24  , 0.    , 0.    , 0.    , 0.    ], dtype=float32))]
+        '''
+
         context_matrix = self._norm(context_matrix.T).T
+        '''
+        [[0.        , 0.        , 0.        , 0.        , 0.64102566,        0.25641027, 0.10256411],
+        [0.        , 0.        , 0.390625  , 0.        , 0.390625  ,        0.15625001, 0.06250001],
+        [0.        , 0.14285715, 0.35714287, 0.        , 0.35714287,        0.14285715, 0.        ],
+        [0.0625    , 0.15625   , 0.39062497, 0.        , 0.39062497,        0.        , 0.        ],
+        [0.1025641 , 0.25641024, 0.6410256 , 0.        , 0.        ,        0.        , 0.        ],
+
+        [0.        , 0.        , 0.        , 0.        , 0.64102566,        0.25641027, 0.10256411],
+        [0.        , 0.        , 0.4166667 , 0.        , 0.4166667 ,        0.16666667, 0.        ],
+        [0.        , 0.16666667, 0.4166667 , 0.        , 0.4166667 ,        0.        , 0.        ],
+        [0.1025641 , 0.25641024, 0.6410256 , 0.        , 0.        ,        0.        , 0.        ],
+
+        [0.        , 0.        , 0.        , 0.        , 0.64102566,        0.25641027, 0.10256411],
+        [0.        , 0.        , 0.390625  , 0.        , 0.390625  ,        0.15625001, 0.06250001],
+        [0.        , 0.13513514, 0.33783785, 0.        , 0.33783785,        0.13513514, 0.05405406],
+        [0.05128205, 0.12820512, 0.3205128 , 0.        , 0.3205128 ,        0.12820512, 0.05128205],
+        [0.05405405, 0.13513513, 0.33783782, 0.        , 0.33783782,        0.13513513, 0.        ],
+        [0.0625    , 0.15625   , 0.39062497, 0.        , 0.39062497,        0.        , 0.        ],
+        [0.1025641 , 0.25641024, 0.6410256 , 0.        , 0.        ,        0.        , 0.        ],
+        
+        [0.        , 0.        , 0.        , 0.        , 0.64102566,        0.25641027, 0.10256411],
+        [0.        , 0.        , 0.4166667 , 0.        , 0.4166667 ,        0.16666667, 0.        ],
+        [0.        , 0.16666667, 0.4166667 , 0.        , 0.4166667 ,        0.        , 0.        ],
+        [0.1025641 , 0.25641024, 0.6410256 , 0.        , 0.        ,        0.        , 0.        ]]
+        '''
         return context_matrix  # (I, 2C + 1)
 
     @partial(jax.jit, static_argnums=0)
@@ -277,8 +404,8 @@ class ContextTopicModel():
             self,
             *,
             phi_hatch: jax.Array,
-            batch: jax.Array,      # это data - массив токенов
-            ctx_bounds: jax.Array,
+            batch: jax.Array,       # это data - массив токенов
+            ctx_bounds: jax.Array,  # границы документов
     ) -> jax.Array:
         phi_it_hatch = jnp.take_along_axis( # из новой Фи (W, T) (умноженной element-wise на n_t (частотность токенов), нормализованная и транспонированная)
             phi_hatch,
@@ -449,7 +576,7 @@ class ContextTopicModel():
                 or iterable returning tuples (data_batch, ctx_bounds_batch).
             ctx_bounds: array of shape (B, ), containing bounds for context. Words
                 beyond the bound are ignored in the context.
-                Это границы документов - массив индексов начала следующего документа
+                Это границы документов - массив индексов начала каждого документа и окончание последнего
             lr: coefficient for updating phi in online mode:
                 phi = phi_prev * (1 - lr) + phi_new * lr
             max_iter: max number of iterations.
