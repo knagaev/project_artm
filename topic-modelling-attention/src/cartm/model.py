@@ -407,16 +407,24 @@ class ContextTopicModel():
             batch: jax.Array,       # это data - массив токенов
             ctx_bounds: jax.Array,  # границы документов
     ) -> jax.Array:
-        phi_it_hatch = jnp.take_along_axis( # из новой Фи (W, T) (умноженной element-wise на n_t (частотность токенов), нормализованная и транспонированная)
+        # из новой Фи (W, T) (умноженной element-wise на n_t (частотность токенов), нормализованная и транспонированная)
+        phi_it_hatch = jnp.take_along_axis( 
             phi_hatch,
             indices=batch[:, None],         # получаем только строки
             axis=0,
         )  # (I, T)
-        phi_it_hatch_with_context = self._get_context_tensor(batch=phi_it_hatch)  # (I, 2C + 1, T) # размножение Фи по количеству токенов в батче - для каждого окна контекста
+
+        # размножение Фи по количеству токенов в батче - для каждого окна контекста
+        phi_it_hatch_with_context = self._get_context_tensor(batch=phi_it_hatch)  # (I, 2C + 1, T) 
+
+        # для каждого токена строка размером 2C + 1 с весами внимания (типа для первого)
+        # [0.        , 0.        , 0.        , 0.        , 0.64102566, 0.25641027, 0.10256411]
         context_matrix = self._get_context_weights_2d(
             batch=batch,
             attn_bounds=ctx_bounds,
         )  # (I, 2C + 1)
+
+        # context_matrix[..., None] - (токенов в батче Х окно контекста Х 1) - для element-wise умножения
         theta_it = context_matrix[..., None] * phi_it_hatch_with_context  # (I, 2C + 1, T)
         theta_it = jnp.sum(theta_it, axis=1)  # (I, T)
         return theta_it
@@ -560,7 +568,7 @@ class ContextTopicModel():
     def fit(
             self,
             data: jax.Array | Iterable[tuple[jax.Array, jax.Array]],
-            ctx_bounds: jax.Array = None,
+            ctx_bounds: jax.Array | None = None,
             *,
             lr: float = 0.1,
             max_iter: int = 1000,
