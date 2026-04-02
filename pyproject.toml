@@ -20,6 +20,11 @@ dependencies = [
     "scikit-learn>=1.8.0",
     "pymorphy2>=0.9.1",
     "pandas>=2.3.3",
+    "matplotlib>=3.10.8",
+    "seaborn>=0.13.2",
+    "pip>=26.0.1",
+    "jax[cuda13,cuda13-local]>=0.9.2",
+    "cartm",
 ]
 
 [project.optional-dependencies]
@@ -47,6 +52,12 @@ examples = [
 #]
 
 en-core-web-sm = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0.tar.gz" }
+cartm = { workspace = true, editable = true }
+
+[tool.uv.workspace]
+members = [
+    "topic-modelling-attention",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["artm_lib"]

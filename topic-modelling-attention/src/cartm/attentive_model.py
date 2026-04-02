@@ -691,7 +691,7 @@ class AttentiveTopicModel:
         # values * theta_ti / n_t, затем нормируем по темам.
         # В зависимости от места вызова values может быть phi[w_i, :]
         # или уже предыдущее p_ti.
-        if not self.n_t:
+        if self.n_t is None:
             return None 
         p_t = self.n_t / jnp.maximum(jnp.sum(self.n_t), self._eps)
         p_ti = values * theta_ti / jnp.maximum(p_t[None, :], self._eps)
