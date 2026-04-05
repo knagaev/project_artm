@@ -25,6 +25,9 @@ dependencies = [
     "pip>=26.0.1",
     "jax[cuda13,cuda13-local]>=0.9.2",
     "cartm",
+    "pytest>=8.4.2",
+    "typer>=0.24.1",
+    "datasets>=4.8.4",
 ]
 
 [project.optional-dependencies]

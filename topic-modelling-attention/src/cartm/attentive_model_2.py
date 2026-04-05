@@ -16,9 +16,8 @@ import jax.numpy as jnp
 from . import metrics as mtc
 from . import regularization as reg
 
-from time import time
 
-class MatveyAttentiveTopicModel:
+class AttentiveTopicModel:
     """
     Тематическая модель с двунаправленным attention на основе
     экспоненциального скользящего среднего.
@@ -39,15 +38,15 @@ class MatveyAttentiveTopicModel:
             *,
             n_topics: int = 10,
             beta: float = 0.5,
-            gamma_i: float = 0.6, #// коэффициент затухания будущих токенов
-            gamma_n: float = 0.6, #// коэффициент затухания прошедших токенов
+            gamma_i: float = 0.6,
+            gamma_n: float = 0.6,
             attention_mode: str = 'ema',
             explicit_include_self: bool = True,
-            weights: jax.Array | None = None,   #// двумерная матрица (I, 2C+1)
+            weights: jax.Array | None = None,
             n_attention_passes: int = 1,
-            regularizers: list | None = None,
+            regularizers: list = None,
             alpha_regularizers: list[Callable[[jax.Array], jax.Array | float]] | None = None,
-            metrics: list | None = None,
+            metrics: list = None,
             eps: float = 1e-12,
     ):
         self.vocab_size = vocab_size
@@ -60,10 +59,10 @@ class MatveyAttentiveTopicModel:
         self.explicit_include_self = explicit_include_self
         self.weights = None if weights is None else jnp.asarray(weights)
         self.n_attention_passes = n_attention_passes
-        self._eps: float = eps
-        self.phi: jax.Array | None = None
-        self.n_t: jax.Array | None = None
-        self.n_w: jax.Array | None = None
+        self._eps = eps
+        self.phi = None
+        self.n_t = None
+        self.n_w = None
         self._validate_attention_config()
 
         self._regularizations = {}
@@ -118,19 +117,19 @@ class MatveyAttentiveTopicModel:
         # [past_far, ..., past_near, current, future_near, ..., future_far].
         # Для расчетов нужны коэффициенты вида [current, near, far].
         center = weights_t.shape[1] // 2
-        center_weight = weights_t[:, center:center + 1] #// (I, 1)
+        center_weight = weights_t[:, center:center + 1]
         past_near_to_far = weights_t[:, :center][:, ::-1]
         future_near_to_far = weights_t[:, center + 1:]
 
-        past = jnp.concatenate([center_weight, past_near_to_far], axis=1).astype(dtype) #// (I, C+1) веса от ведущего до самого левого
-        future = jnp.concatenate([center_weight, future_near_to_far], axis=1).astype(dtype) #// (I, C+1) веса от ведущего до самого правого
+        past = jnp.concatenate([center_weight, past_near_to_far], axis=1).astype(dtype)
+        future = jnp.concatenate([center_weight, future_near_to_far], axis=1).astype(dtype)
         return past, future
 
-    @jax.jit(static_argnums=[0])
+    @partial(jax.jit, static_argnums=0)
     def _normalize_explicit_weights(self, weights_t: jax.Array) -> jax.Array:
-        return self._norm_rows(weights_t) #// зачем нормализуются веса?
+        return self._norm_rows(weights_t)
 
-    @jax.jit(static_argnums=[0])
+    @partial(jax.jit, static_argnums=0)
     def _effective_attention_weights(self, weights_t: jax.Array) -> jax.Array:
         # Для explicit_no_self центр исключается только в самом операторе
         # внимания: зануляем центральный коэффициент и нормируем соседей.
@@ -140,11 +139,11 @@ class MatveyAttentiveTopicModel:
         masked = weights_t.at[:, center].set(0.0)
         return self._norm_rows(masked)
 
-    @jax.jit(static_argnums=(0,), static_argnames=('transpose',))
+    @partial(jax.jit, static_argnums=(0,), static_argnames=('transpose',))
     def _apply_explicit_operator(
             self,
             *,
-            x: jax.Array, #// x должен быть (2C+1, I)?
+            x: jax.Array,
             weights_t: jax.Array,
             ctx_bounds: jax.Array,
             transpose: bool = False,
@@ -157,27 +156,24 @@ class MatveyAttentiveTopicModel:
                 f'weights rows [{weights_t.shape[0]}] must match sequence length [{x.shape[1]}].'
             )
 
-        weights_t = self._effective_attention_weights(weights_t.astype(x.dtype)) #// зануляется ведущий и нормируются
+        weights_t = self._effective_attention_weights(weights_t.astype(x.dtype))
         center = weights_t.shape[1] // 2
-        #// две матрицы (I, C+1) веса от ведущего до самого левого и от ведущего до самого правого
         past_weights, future_weights = self._explicit_directional_weights(
             weights_t=weights_t,
             dtype=x.dtype,
         )
-        #// ищем возможные позиции в ctx_bounds[1:] для (0, ..., 2С+1)
-        #// получаем для каждой позиции номер документа, которой она принадлежит
         doc_ids = jnp.searchsorted(ctx_bounds[1:], jnp.arange(x.shape[1]), side='right')
-        kernel_len = past_weights.shape[1] #// должно быть С+1
+        kernel_len = past_weights.shape[1]
 
         if self.explicit_include_self:
             center_contrib = weights_t[:, center]
         else:
             center_contrib = jnp.zeros((x.shape[1],), dtype=x.dtype)
-        result = center_contrib[None, :] * x #// непонятно - поэлементное умножение x либо на ноль, либо на веса ведущих 
-        for offset in range(1, kernel_len): #// от 1 до С (полуокно)
+        result = center_contrib[None, :] * x
+        for offset in range(1, kernel_len):
             if x.shape[1] <= offset:
                 break
-            #// умножение x на веса окна со сдвигом от 1 до С с учетом границ документов
+
             same_doc = (doc_ids[offset:] == doc_ids[:-offset]).astype(x.dtype)
             if not transpose:
                 result = result.at[:, offset:].add(
@@ -216,7 +212,6 @@ class MatveyAttentiveTopicModel:
 
         self._metrics[metric.tag] = metric
 
-    #//? что такое alpha_regularization?
     def add_alpha_regularization(self, *, tag: str, regularization: Callable[[jax.Array], jax.Array | float]):
         if not callable(regularization):
             raise TypeError(f'Alpha regularization [{tag}] must be callable.')
@@ -246,7 +241,7 @@ class MatveyAttentiveTopicModel:
         except KeyError:
             print(f'Alpha regularization with tag {tag} is not present.')
 
-    @jax.jit(static_argnums=[0])
+    @partial(jax.jit, static_argnums=0)
     def _norm(self, x: jax.Array) -> jax.Array:
         # Нормализация идет по столбцам. Перед этим отрицательные значения
         # обнуляются, чтобы после сложения статистик и градиентов
@@ -255,13 +250,13 @@ class MatveyAttentiveTopicModel:
         norm = x.sum(axis=0)
         return jnp.where(norm > self._eps, x / norm, jnp.zeros_like(x))
 
-    @jax.jit(static_argnums=[0])
+    @partial(jax.jit, static_argnums=0)
     def _norm_rows(self, x: jax.Array) -> jax.Array:
         x = jnp.maximum(x, jnp.zeros_like(x))
         norm = x.sum(axis=1, keepdims=True)
         return jnp.where(norm > self._eps, x / norm, jnp.zeros_like(x))
 
-    @jax.jit(static_argnums=[0])
+    @partial(jax.jit, static_argnums=0)
     def _ema_windowed_attn(
             self,
             *,
@@ -271,13 +266,13 @@ class MatveyAttentiveTopicModel:
         if x.shape[1] == 0:
             return x
 
-        seq_len = x.shape[1] #//? I?
-        doc_ids = jnp.searchsorted(ctx_bounds[1:], jnp.arange(seq_len), side='right') #// массив номеров документов для каждой позиции
-        doc_starts = jnp.concatenate([ #// позиции начала документа
+        seq_len = x.shape[1]
+        doc_ids = jnp.searchsorted(ctx_bounds[1:], jnp.arange(seq_len), side='right')
+        doc_starts = jnp.concatenate([
             jnp.array([True], dtype=bool),
             doc_ids[1:] != doc_ids[:-1],
         ])
-        doc_ends = jnp.concatenate([ #// позиции начала документа
+        doc_ends = jnp.concatenate([
             doc_ids[:-1] != doc_ids[1:],
             jnp.array([True], dtype=bool),
         ])
@@ -330,7 +325,7 @@ class MatveyAttentiveTopicModel:
 
         return self.beta * forward + (1.0 - self.beta) * backward
 
-    @jax.jit(static_argnums=[0])
+    @partial(jax.jit, static_argnums=0)
     def _ema_windowed_attn_transpose(
             self,
             *,
@@ -392,7 +387,7 @@ class MatveyAttentiveTopicModel:
 
         return self.beta * forward_t + (1.0 - self.beta) * backward_t
 
-    @jax.jit(static_argnums=[0])
+    @partial(jax.jit, static_argnums=0)
     def _attn_function(
             self,
             x: jax.Array,
@@ -419,7 +414,7 @@ class MatveyAttentiveTopicModel:
             ctx_bounds = jnp.array([0, x.shape[1]], dtype=int)
         return self._ema_windowed_attn(x=x, ctx_bounds=ctx_bounds)
 
-    @jax.jit(static_argnums=[0])
+    @partial(jax.jit, static_argnums=0)
     def _segmented_attn_function_explicit(
             self,
             *,
@@ -479,7 +474,7 @@ class MatveyAttentiveTopicModel:
 
         return self._normalize_explicit_weights(weights_t.astype(jnp.float32))
 
-    @jax.jit(static_argnums=[0])
+    @partial(jax.jit, static_argnums=0)
     def _get_doc_ids(
             self,
             *,
@@ -492,7 +487,7 @@ class MatveyAttentiveTopicModel:
         # на границах документов.
         return jnp.searchsorted(ctx_bounds[1:], jnp.arange(len(batch)), side='right')
 
-    @jax.jit(static_argnums=[0])
+    @partial(jax.jit, static_argnums=0)
     def _get_doc_start_end_flags(
             self,
             *,
@@ -514,7 +509,7 @@ class MatveyAttentiveTopicModel:
         ])
         return doc_starts, doc_ends
 
-    @jax.jit(static_argnums=[0])
+    @partial(jax.jit, static_argnums=0)
     def _segmented_attn_function(
             self,
             *,
@@ -538,7 +533,7 @@ class MatveyAttentiveTopicModel:
 
         return self._ema_windowed_attn(x=x, ctx_bounds=ctx_bounds)
 
-    @jax.jit(static_argnums=[0])
+    @partial(jax.jit, static_argnums=0)
     def _calc_theta_ti(
             self,
             *,
@@ -561,8 +556,8 @@ class MatveyAttentiveTopicModel:
         doc_starts, doc_ends = self._get_doc_start_end_flags(batch=batch, ctx_bounds=ctx_bounds)
         return self._segmented_attn_function(
             x=p_ti.T,
-            doc_starts=doc_starts,  #//? не нужно передавать - считаются внутри
-            doc_ends=doc_ends,      #//? не нужно передавать - считаются внутри
+            doc_starts=doc_starts,
+            doc_ends=doc_ends,
             batch=batch,
             ctx_bounds=ctx_bounds,
             weights_t=weights_t,
@@ -591,7 +586,7 @@ class MatveyAttentiveTopicModel:
             end_i = int(end)
             p_ti_segment = p_ti[start_i:end_i]
             segment_weights = None
-            if self.attention_mode == 'explicit' and weights_t:
+            if self.attention_mode == 'explicit':
                 segment_weights = weights_t[start_i:end_i]
             theta_parts.append(
                 self._attn_function(
@@ -603,7 +598,7 @@ class MatveyAttentiveTopicModel:
 
         return jnp.concatenate(theta_parts, axis=0)
 
-    @jax.jit(static_argnums=[0])
+    @partial(jax.jit, static_argnums=0)
     def _apply_attn_transpose(
             self,
             *,
@@ -645,8 +640,7 @@ class MatveyAttentiveTopicModel:
 
         return self._ema_windowed_attn_transpose(x=x, ctx_bounds=ctx_bounds)
 
-    #// закончил здесь
-    @jax.jit(static_argnums=[0])
+    @partial(jax.jit, static_argnums=0)
     def _calc_q_local(
             self,
             *,
@@ -687,13 +681,11 @@ class MatveyAttentiveTopicModel:
             *,
             values: jax.Array,
             theta_ti: jax.Array,
-    ) -> jax.Array | None:
+    ) -> jax.Array:
         # Шаг 8 алгоритма: уточняем p_ti пропорционально
         # values * theta_ti / n_t, затем нормируем по темам.
         # В зависимости от места вызова values может быть phi[w_i, :]
         # или уже предыдущее p_ti.
-        if self.n_t is None:
-            return None 
         p_t = self.n_t / jnp.maximum(jnp.sum(self.n_t), self._eps)
         p_ti = values * theta_ti / jnp.maximum(p_t[None, :], self._eps)
         return self._norm(p_ti.T).T
@@ -704,11 +696,11 @@ class MatveyAttentiveTopicModel:
             phi: jax.Array,
             theta_ti: jax.Array,
             batch: jax.Array,
-    ) -> jax.Array | None:
+    ) -> jax.Array:
         phi_twi = phi[batch]
         return self._update_p_ti(values=phi_twi, theta_ti=theta_ti)
 
-    @jax.jit(static_argnums=[0])
+    @partial(jax.jit, static_argnums=0)
     def _calc_n_w(
             self,
             *,
@@ -722,7 +714,6 @@ class MatveyAttentiveTopicModel:
             minlength=self.vocab_size,
         )
 
-    # Подсчитать глобальные частоты слов
     def _init_word_counts(
             self,
             data: jax.Array,
@@ -749,7 +740,7 @@ class MatveyAttentiveTopicModel:
             axis=1,
         )
 
-    @jax.jit(static_argnums=[0])
+    @partial(jax.jit, static_argnums=0)
     def _calc_n_tw_simple(
             self,
             *,
@@ -765,7 +756,7 @@ class MatveyAttentiveTopicModel:
             inplace=False,
         )
 
-    @jax.jit(static_argnums=[0])
+    @partial(jax.jit, static_argnums=0)
     def _calc_n_tw(
             self,
             *,
@@ -792,14 +783,14 @@ class MatveyAttentiveTopicModel:
             inplace=False,
         )
 
-    @jax.jit(static_argnums=(0,), static_argnames=('grad_reg',))
+    @partial(jax.jit, static_argnums=(0,), static_argnames=('grad_reg',))
     def _calc_phi(
             self,
             *,
             n_tw: jax.Array,
             N_tw: jax.Array,
             grad_reg: Callable,
-            phi: jax.Array | None = None,
+            phi: jax.Array = None,
     ) -> jax.Array:
         # Шаг 12 алгоритма.
         # phi_base = n_tw / n_w соответствует текущей оценке phi без
@@ -818,7 +809,7 @@ class MatveyAttentiveTopicModel:
         phi_new = n_tw + phi_base * N_tw + phi_base * reg_term
         return self._norm(phi_new.T).T
 
-    @jax.jit(static_argnums=(0,), static_argnames=('grad_alpha_reg',))
+    @partial(jax.jit, static_argnums=(0,), static_argnames=('grad_alpha_reg',))
     def _calc_weights_ti(
             self,
             *,
@@ -910,10 +901,10 @@ class MatveyAttentiveTopicModel:
             phi: jax.Array,
             grad_reg: Callable,
             grad_alpha_reg: Callable,
-            ctx_bounds: jax.Array | None = None,
+            ctx_bounds: jax.Array = None,
             weights_t: jax.Array | None = None,
             phase_progress=None,
-    ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array] | None:
+    ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array | None]:
         # Один полный EM-шаг по batch:
         # 1) инициализация p_ti из phi;
         # 2) несколько проходов attention/refinement;
@@ -921,8 +912,8 @@ class MatveyAttentiveTopicModel:
         # 4) обновление phi и n_t.
         ctx_bounds = self._resolve_ctx_bounds(batch=batch, ctx_bounds=ctx_bounds)
         weights_t = self._resolve_explicit_weights(weights_t=weights_t, batch=batch)
-        p_ti: jax.Array = phi[batch]
-        theta_ti: jax.Array = p_ti
+        p_ti = phi[batch]
+        theta_ti = p_ti
 
         for _ in range(self.n_attention_passes):
             self._advance_phase_progress(phase_progress, phase='theta_refine')
@@ -973,15 +964,13 @@ class MatveyAttentiveTopicModel:
             data: jax.Array,
             ctx_bounds: jax.Array,
             *,
-            weights: jax.Array | None = None,
+            weights: jax.Array = None,
             max_iter: int = 1000,
             tol: float = 1e-3,
             verbose: int = 0,
             seed: int = 0,
             progress_bar: bool = False,
     ):
-        print('start model')
-        begin_time = time()
         # Инициализация близка к шагу 1 из алгоритма:
         # phi инициализируется случайно и нормируется по темам,
         # n_t стартует с равномерного вектора единиц.
@@ -1047,7 +1036,6 @@ class MatveyAttentiveTopicModel:
             )
 
             self.phi = phi_new
-            print(f"{self.phi[0]=}")
             if self.attention_mode == 'explicit':
                 self.weights = weights_state
             # n_t хранится как распределение по темам, а не как абсолютные
@@ -1059,14 +1047,11 @@ class MatveyAttentiveTopicModel:
         if pbar is not None:
             pbar.close()
 
-        end_time = time()
-        print(f"Время выполнения {end_time - begin_time}")
-
     def calc_perplexity(
             self,
             data: jax.Array,
             ctx_bounds: jax.Array,
-            weights: jax.Array | None = None,
+            weights: jax.Array = None,
     ) -> float:
         # Для корректной perplexity повторяем тот же процесс inference для
         # p_ti/theta_ti, что и на обучении. Иначе метрика считалась бы для

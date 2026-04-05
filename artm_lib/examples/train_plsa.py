@@ -145,9 +145,9 @@ def main():
     model = PLSA(n_topics=args.n_topics, vocab_size=V, random_state=args.seed)
     history = model.fit_full(
         X_train,
-        max_iter=args.max_iter,
+        n_epochs=args.max_iter,
         tol=1e-4,
-        val_X=X_val,
+        val_loader=X_val,
         patience=args.patience,
         min_delta=args.min_delta,
         verbose=True,

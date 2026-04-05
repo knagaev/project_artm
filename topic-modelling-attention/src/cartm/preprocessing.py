@@ -1,7 +1,10 @@
+import jax
+from tests.test_metrics import vocab_size
 import re
 from typing import Sequence, Callable, Iterable
 
 import jax.numpy as jnp
+import numpy as np
 from jax import Array
 
 from nltk import word_tokenize
@@ -18,6 +21,7 @@ class DatasetPreprocessor:
             preprocessor: Callable[[str], str] | None = None,
             tokenizer: Callable[[str], list[str]] | None = None,
             stopwords: Iterable[str] | None = None,
+            min_word_len: int = 2
     ):
         """
         Convert sequence of raw documents into a sequence of tokens
@@ -58,6 +62,8 @@ class DatasetPreprocessor:
                 self._stopwords = set(stopwords)
             except TypeError:
                 raise
+        
+        self._min_word_len = min_word_len
 
     def fit(
             self,
@@ -128,7 +134,9 @@ class DatasetPreprocessor:
             text_tokenized = word_tokenize(text)
             stemmer = PorterStemmer()
             #text_tokenized = [stemmer.stem(token) for token in text_tokenized]
-            text_tokenized = [stemmer.stem(token) for token in text_tokenized if token not in self._stopwords and len(token) > 2]
+            text_tokenized = [stemmer.stem(token) for token in text_tokenized 
+                                if token not in self._stopwords 
+                                    and len(token) >= self._min_word_len]
         else:
             text_tokenized = self._tokenizer(text)
 
@@ -150,6 +158,44 @@ class DatasetPreprocessor:
         """
         return self._vocab
 
+    def fit_transform_plsa(
+            self,
+            data: Sequence[str],
+            *,
+            return_doc_bounds: bool = True,
+    #) -> jax.Array:
+    ) -> np.ndarray:
+        """
+        Learn the vocabulary dictionary and return a list of lists for
+        terms from each document.
+
+        Args:
+            data: a sequence of strings.
+            return_doc_bounds: if True, returns indices of document bounds
+                as the second value (with the first value 0 and the last
+                value is len(data)).
+        """
+        texts_tokenized = []
+        for doc in data:
+            texts_tokenized.append(self._preprocess_text(doc))
+
+        if self._vocab is None:
+            self._vocab = self._create_vocabulary(texts_tokenized)
+
+        vocab_size = len(self._vocab)
+        print(f"{vocab_size=}")
+        docs_data = []
+        for doc in data:
+            docs_data.append(
+                jnp.bincount(
+                    jnp.array([self._vocab[word] for word in self._preprocess_text(doc)]),
+                    length=vocab_size,
+                    minlength=vocab_size,
+            ))
+
+        self._data = np.array(docs_data)
+
+        return self._data
 
 class BatchLoader:
     def __init__(
