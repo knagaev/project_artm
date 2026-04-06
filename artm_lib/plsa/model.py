@@ -287,7 +287,8 @@ class PLSA:
         if verbose:
             print("Сбор полной обучающей матрицы...")
         all_bows_train = []
-        for doc_ids, bow in train_loader:
+        #for doc_ids, bow in train_loader:
+        for bow in train_loader:
             all_bows_train.append(bow)
         X_train = vstack(all_bows_train)
 

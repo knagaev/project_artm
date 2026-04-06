@@ -23,11 +23,18 @@ dependencies = [
     "matplotlib>=3.10.8",
     "seaborn>=0.13.2",
     "pip>=26.0.1",
-    "jax[cuda13,cuda13-local]>=0.9.2",
     "cartm",
     "pytest>=8.4.2",
     "typer>=0.24.1",
     "datasets>=4.8.4",
+    "jax",
+]
+
+[tool.uv]
+# Автоматический выбор в зависимости от платформы
+required-environments = [
+    "sys_platform == 'linux'",
+    "sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]
@@ -40,6 +47,8 @@ examples = [
     "matplotlib",              # для визуализации тем
     "pandas"                   # для совместимости в примерах
 ]
+cpu = ["jax[cpu]"]
+cuda = ["jax[cuda13]"]
 
 #[[tool.uv.index]]
 #name = "pytorch-cu130"
@@ -53,7 +62,8 @@ examples = [
 #torchvision = [
 #  { index = "pytorch-cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 #]
-
+# Для CUDA на Linux
+jax-cuda13-plugin = { index = "jax-cuda", marker = "sys_platform == 'linux'" }
 en-core-web-sm = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0.tar.gz" }
 cartm = { workspace = true, editable = true }
 

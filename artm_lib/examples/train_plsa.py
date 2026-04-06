@@ -44,7 +44,7 @@ def parse_args():
     )
 
     # Параметры обучения
-    parser.add_argument("--n_topics", type=int, default=20, help="Number of topics")
+    parser.add_argument("--n_topics", type=int, default=10, help="Number of topics")
     parser.add_argument("--max_iter", type=int, default=100, help="Maximum number of EM iterations")
     parser.add_argument("--batch_size", type=int, default=1000, help="Batch size for data loading")
 

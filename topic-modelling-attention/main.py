@@ -17,10 +17,10 @@ from time import time
 
 if __name__ == '__main__':
 
-    data = fetch_20newsgroups(data_home='./data/', subset='all').data
+    #data = fetch_20newsgroups(data_home='./data/', subset='all').data
     #data = data[:400]
-    #with open('./data/test_data.txt') as f:
-    #    data = f.readlines()
+    with open('./data/test_data.txt') as f:
+        data = f.readlines()
 
     preprocessor = DatasetPreprocessor()
     tokenized_data, document_bounds = preprocessor.fit_transform(data)
@@ -38,7 +38,7 @@ if __name__ == '__main__':
         seed=42,
     )
 
-    print(attentive_topic_model.phi[0])
+    print(attentive_topic_model.phi[:, 0])
 
     '''
     for i in range(5):
