@@ -148,7 +148,7 @@ class DatasetPreprocessor:
     @staticmethod
     def _create_vocabulary(texts: list[list[str]]) -> dict:
         """Create vocabulary from all unique terms in tokenized corpus."""
-        unique_words = {word for text in texts for word in text}
+        unique_words = sorted({word for text in texts for word in text})
         return {word: token for token, word in enumerate(unique_words)}
 
     @property

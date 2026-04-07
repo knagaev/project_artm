@@ -537,13 +537,15 @@ class MatveyAttentiveTopicModel:
 
         return self._ema_windowed_attn(x=x, ctx_bounds=ctx_bounds)
 
+    #// расчет theta_ti
+    #// исходные данные
     @partial(jax.jit, static_argnums=0)
     def _calc_theta_ti(
             self,
             *,
-            p_ti: jax.Array,
-            batch: jax.Array,
-            ctx_bounds: jax.Array,
+            p_ti: jax.Array,    #// (I, T) текущие вероятности тем для каждой позиции
+            batch: jax.Array,   #// (I,) массив токенов в батче 
+            ctx_bounds: jax.Array,  #// (D + 1) границы документов (позиции старта и после финиша)
             weights_t: jax.Array | None = None,
     ) -> jax.Array:
         # Шаг 7 алгоритма: theta_ti = Attn(p_ti).
@@ -921,10 +923,11 @@ class MatveyAttentiveTopicModel:
         # 4) обновление phi и n_t.
         ctx_bounds = self._resolve_ctx_bounds(batch=batch, ctx_bounds=ctx_bounds)
         weights_t = self._resolve_explicit_weights(weights_t=weights_t, batch=batch)
-        p_ti = phi[batch]
-        theta_ti = p_ti
+        p_ti = phi[batch] #// (I, T) строки (распределение по темам) для токенов по порядку позиций в батче 
+        #// стартовой вероятностью тем в позиции берем вероятности для токена в этой позиции из phi
+        theta_ti = p_ti #// непонятная строка - theta_ti рассчитывается ниже в self._calc_theta_ti()
 
-        for _ in range(self.n_attention_passes):
+        for _ in range(self.n_attention_passes): # Шаг 6 алгоритма AARTM
             self._advance_phase_progress(phase_progress, phase='theta_refine')
             theta_ti = self._calc_theta_ti(
                 p_ti=p_ti,
@@ -977,7 +980,7 @@ class MatveyAttentiveTopicModel:
             max_iter: int = 1000,
             tol: float = 1e-3,
             verbose: int = 0,
-            seed: int = 0,
+            seed: int = 42,
             progress_bar: bool = False,
     ):
         # Инициализация близка к шагу 1 из алгоритма:

@@ -4,8 +4,8 @@ import jax.numpy as jnp
 
 from sklearn.datasets import fetch_20newsgroups
 
-import matplotlib.pyplot as plt
-import seaborn as sns
+#import matplotlib.pyplot as plt
+#import seaborn as sns
 
 #from cartm.experimental_model import ExperimentalContextTopicModel
 #from cartm.attentive_model import AttentiveTopicModel
@@ -24,10 +24,11 @@ if __name__ == '__main__':
 
     preprocessor = DatasetPreprocessor()
     tokenized_data, document_bounds = preprocessor.fit_transform(data)
+    print(tokenized_data)
 
     attentive_topic_model = MatveyAttentiveTopicModel(
         vocab_size=len(preprocessor.vocabulary),
-        ctx_len=10,
+        ctx_len=3,
         n_topics=10
     )
 
