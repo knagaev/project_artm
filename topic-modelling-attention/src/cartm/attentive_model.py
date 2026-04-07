@@ -270,13 +270,13 @@ class MatveyAttentiveTopicModel:
         if x.shape[1] == 0:
             return x
 
-        seq_len = x.shape[1] #//? I?
+        seq_len = x.shape[1] #// для p_ti.T это I
         doc_ids = jnp.searchsorted(ctx_bounds[1:], jnp.arange(seq_len), side='right') #// массив номеров документов для каждой позиции
         doc_starts = jnp.concatenate([ #// позиции начала документа
             jnp.array([True], dtype=bool),
             doc_ids[1:] != doc_ids[:-1],
         ])
-        doc_ends = jnp.concatenate([ #// позиции начала документа
+        doc_ends = jnp.concatenate([ #// позиции за концом документа
             doc_ids[:-1] != doc_ids[1:],
             jnp.array([True], dtype=bool),
         ])
