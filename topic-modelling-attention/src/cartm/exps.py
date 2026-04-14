@@ -621,6 +621,13 @@ def run_one_model(
     print("phi first row:", phi_np[0])
     print("phi first column:", phi_np[:, 0])
 
+    np.save('phi Stanislavo.npy', phi_np)
+    
+    import json
+    # Save to file
+    with open("vocab Stanislavo.json", "w") as f:
+        json.dump(vocab, f, indent=4) 
+
     bow = build_bow_matrix_numpy(data, doc_bounds, vocab_size)
     metrics = make_metrics(
         bow=jnp.asarray(bow),
