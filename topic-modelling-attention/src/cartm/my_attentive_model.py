@@ -83,7 +83,7 @@ def old_bidir_ema(
     
     return beta * right_ema + (1.0 - beta) * left_ema
 
-def bidir_ema(
+def local_bidir_ema(
     X: NDArray[np.float64], 
     indices: NDArray[np.int64], 
     gamma: np.float64 = np.float64(0.6), 
@@ -141,6 +141,38 @@ def bidir_ema(
     left_ema = left_ema_rev[:, ::-1]
     
     return beta * right_ema + (1.0 - beta) * left_ema
+
+def bidir_ema(
+    X: NDArray[np.float64], 
+    indices: NDArray[np.int64], 
+    gamma: np.float64 = np.float64(0.6), 
+    beta: np.float64 = np.float64(0.5)
+) -> NDArray[np.float64]:
+    H, I = X.shape
+    Y = np.zeros_like(X)
+    Z = np.zeros_like(X)
+    alpha = 1.0 - gamma
+
+    starts = indices[:-1]
+    ends = indices[1:]
+
+    for k in range(len(starts)):
+        s, e = starts[k], ends[k]
+        seg = X[:, s:e]
+        L = e - s
+        if L == 0:
+            continue
+
+        # Первая позиция сегмента
+        Y[:, s] = seg[:, 0]
+        Z[:, e-1] = seg[:, -1]
+
+        # Векторизованный проход по строкам, цикл только по длине сегмента
+        for t in range(1, L):
+            Y[:, s+t] = gamma * seg[:, t] + alpha * Y[:, s+t-1]
+            Z[:, e-1-t] = gamma * seg[:, -1-t] + alpha * Z[:, e-t]
+
+    return beta * Y + (1.0 - beta) * Z
 
 class MyAttentiveTopicModel:
     """
@@ -1185,7 +1217,7 @@ class MyAttentiveTopicModel:
                 )
 
                 #// шаг 10 
-                #N_tw += (p_ti / theta_ti) @ q_wi.T
+                N_tw += (p_ti / theta_ti) @ q_wi.T
                 
                 #// шаг 11.1 
                 rows = np.arange(self.n_topics)[:, None]
@@ -1199,8 +1231,8 @@ class MyAttentiveTopicModel:
 
             #// конец цикл для всех батчей шаги 4-11
 
-            #phi_new = _norm_numpy(n_tw + np.divide(n_tw * N_tw, n_w, out=np.zeros_like(n_tw), where=n_w != 0))
-            phi_new = _norm_numpy(n_tw)
+            phi_new = _norm_numpy(n_tw + np.divide(n_tw * N_tw, n_w, out=np.zeros_like(n_tw), where=n_w != 0))
+            #phi_new = _norm_numpy(n_tw)
             n_t = n_t_tilda
 
             diff_norm = np.linalg.norm(phi_new - phi)

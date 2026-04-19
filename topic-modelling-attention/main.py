@@ -32,13 +32,13 @@ if __name__ == '__main__':
         min_word_len=0
         )
     #tokenized_data, document_bounds = preprocessor.fit_transform(data)
-    batch_data = preprocessor.fit_transform_batch(data, max_batch_size=10000)
+    batch_data = preprocessor.fit_transform_batch(data, max_batch_size=1000)
     #print(batch_data)
 
     attentive_topic_model = MyAttentiveTopicModel(
         vocab_size=len(preprocessor.vocabulary),
         ctx_len=3,
-        n_topics=3
+        n_topics=10
     )
 
     attentive_topic_model.fit(
