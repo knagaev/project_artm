@@ -4,8 +4,9 @@ import re
 from typing import Sequence, Callable, Iterable
 
 import jax.numpy as jnp
-import numpy as np
 from jax import Array
+import numpy as np
+from numpy.typing import NDArray
 
 from nltk import word_tokenize
 from nltk.corpus import stopwords as default_stopwords
@@ -40,6 +41,8 @@ class DatasetPreprocessor:
         self._vocab = vocabulary
         self._data = None
         self._doc_bounds = None
+
+        self._batch_data: list[tuple[NDArray, NDArray]] = []
 
         if preprocessor is not None and not callable(preprocessor):
             raise TypeError(
@@ -117,6 +120,48 @@ class DatasetPreprocessor:
             return self._data, self._doc_bounds
         return self._data
 
+    def fit_transform_batch(
+            self,
+            data: Sequence[str],
+            *,
+            max_batch_size:int = 10000,
+    ) -> list[tuple[NDArray, NDArray]]:
+        """
+        Learn the vocabulary dictionary and return a flattened list of all
+        terms from all documents.
+
+        Args:
+            data: a sequence of strings.
+            return_doc_bounds: if True, returns indices of document bounds
+                as the second value (with the first value 0 and the last
+                value is len(data)).
+        """
+        tokens = set()
+        texts_tokenized = [[]]
+        doc_bounds = [[0]]
+        current_batch_size = 0
+        
+        for doc in data:
+            doc_tokenized = self._preprocess_text(doc)
+            tokens.update(doc_tokenized)
+            doc_tokenized_len = len(doc_tokenized)
+            if current_batch_size + doc_tokenized_len > max_batch_size:
+                texts_tokenized.append([])
+                doc_bounds.append([0]) # начинаем с последней границы в последнем батче
+                current_batch_size = 0
+            texts_tokenized[-1].extend(doc_tokenized)
+            doc_bounds[-1].append(doc_bounds[-1][-1] + doc_tokenized_len)
+            current_batch_size += doc_tokenized_len
+
+        if self._vocab is None:
+            self._vocab = self._create_vocabulary_from_set(tokens)
+
+        self._batch_data = [(np.array([self._vocab[t] for t in tt]), np.array(db)) 
+                                for tt, db 
+                                in zip(texts_tokenized, doc_bounds)]
+
+        return self._batch_data
+
     def _preprocess_text(self, text: str) -> list[str]:
         """Apply preprocessing and tokenization to a single document."""
         # preprocessing stage
@@ -125,7 +170,7 @@ class DatasetPreprocessor:
                 text = text.lower()
                 text = re.sub(r'[^a-z]', ' ', text)
             else:
-                text = re.sub(r'[^A-Za-z]', ' ', text)
+                text = re.sub(r'[^doc_bounds-Za-z]', ' ', text)
         else:
             text = self._preprocessor(text)
 
@@ -148,8 +193,14 @@ class DatasetPreprocessor:
     @staticmethod
     def _create_vocabulary(texts: list[list[str]]) -> dict:
         """Create vocabulary from all unique terms in tokenized corpus."""
-        unique_words = sorted({word for text in texts for word in text})
+        unique_words = sorted({word for text in texts for word in text}) #// добавил сортировку для повторяемости идентификаторов токенов
         return {word: token for token, word in enumerate(unique_words)}
+
+    @staticmethod
+    def _create_vocabulary_from_set(words: set[str]) -> dict:
+        """Create vocabulary from all unique terms in tokenized corpus."""
+        sorted_words = sorted(words) #// добавил сортировку для повторяемости идентификаторов токенов
+        return {word: token for token, word in enumerate(sorted_words)}
 
     @property
     def vocabulary(self):
@@ -219,7 +270,7 @@ class BatchLoader:
         self.batch_size = batch_size
         self._batches = []
 
-        num_batches = jnp.ceil(len(data) / batch_size).astype(int)
+        '''num_batches = jnp.ceil(len(data) / batch_size).astype(int)
         for i in range(num_batches):
             start_idx = i * self.batch_size
             end_idx = (i + 1) * self.batch_size
@@ -242,7 +293,21 @@ class BatchLoader:
                     jnp.array([end_idx - start_idx]),
                 ], dtype=int)
 
-            self._batches.append((data_batch, doc_bounds_batch))
+            self._batches.append((data_batch, doc_bounds_batch))'''
+
+        if len(doc_bounds) == 0:
+            return []
+
+        split_idx = []
+        start = 0
+        while start < len(doc_bounds):
+            # Ищем первый индекс, где значение > doc_bounds[start] + max_dist
+            end = np.searchsorted(doc_bounds, doc_bounds[start] + self.batch_size, side='right')
+            split_idx.append(end)
+            start = end
+
+        # np.split принимает индексы разрезов (последний len(doc_bounds) отбрасываем)
+        return np.split(doc_bounds, split_idx[:-1])
 
     def __len__(self):
         return len(self._batches)

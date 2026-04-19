@@ -1,3 +1,4 @@
+from matplotlib.pylab import ma
 from sys import path as syspath
 from os import path as ospath
 import jax.numpy as jnp
@@ -10,32 +11,38 @@ from sklearn.datasets import fetch_20newsgroups
 #from cartm.experimental_model import ExperimentalContextTopicModel
 #from cartm.attentive_model import AttentiveTopicModel
 #from cartm.improved_model import AttentiveTopicModel
-from cartm.attentive_model import MatveyAttentiveTopicModel
+#from cartm.attentive_model import MatveyAttentiveTopicModel
+from cartm.my_attentive_model import MyAttentiveTopicModel
 
 from cartm.preprocessing import DatasetPreprocessor
 from time import time
 
+import warnings
+warnings.simplefilter('error', RuntimeWarning)
+
 if __name__ == '__main__':
 
-    #data = fetch_20newsgroups(data_home='./data/', subset='all').data
-    #data = data[:400]
-    with open('./data/test_data.txt') as f:
-        data = f.readlines()
+    data = fetch_20newsgroups(data_home='./data/', subset='all').data
+    data = data[:400]
+    #with open('./data/test_data.txt') as f:
+    #    data = f.readlines()
 
-    preprocessor = DatasetPreprocessor()
-    tokenized_data, document_bounds = preprocessor.fit_transform(data)
-    print(tokenized_data)
+    preprocessor = DatasetPreprocessor(
+        stopwords=set(), 
+        min_word_len=0
+        )
+    #tokenized_data, document_bounds = preprocessor.fit_transform(data)
+    batch_data = preprocessor.fit_transform_batch(data, max_batch_size=10000)
+    #print(batch_data)
 
-    attentive_topic_model = MatveyAttentiveTopicModel(
+    attentive_topic_model = MyAttentiveTopicModel(
         vocab_size=len(preprocessor.vocabulary),
         ctx_len=3,
-        n_topics=10
+        n_topics=3
     )
 
     attentive_topic_model.fit(
-        data=tokenized_data,
-        ctx_bounds=document_bounds,
-        verbose=2,
+        batch_data_with_doc_bounds=batch_data,
         seed=42,
     )
 
