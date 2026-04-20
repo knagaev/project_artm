@@ -43,6 +43,7 @@ class DatasetPreprocessor:
         self._doc_bounds = None
 
         self._batch_data: list[tuple[NDArray, NDArray]] = []
+        self._batch_data_jax: list[tuple[Array, tuple]] = []
 
         if preprocessor is not None and not callable(preprocessor):
             raise TypeError(
@@ -161,6 +162,48 @@ class DatasetPreprocessor:
                                 in zip(texts_tokenized, doc_bounds)]
 
         return self._batch_data
+
+    def fit_transform_batch_jax(
+            self,
+            data: Sequence[str],
+            *,
+            max_batch_size:int = 10000,
+    ) -> list[tuple[Array, tuple]]:
+        """
+        Learn the vocabulary dictionary and return a flattened list of all
+        terms from all documents.
+
+        Args:
+            data: a sequence of strings.
+            return_doc_bounds: if True, returns indices of document bounds
+                as the second value (with the first value 0 and the last
+                value is len(data)).
+        """
+        tokens = set()
+        texts_tokenized = [[]]
+        doc_bounds = [[0]]
+        current_batch_size = 0
+        
+        for doc in data:
+            doc_tokenized = self._preprocess_text(doc)
+            tokens.update(doc_tokenized)
+            doc_tokenized_len = len(doc_tokenized)
+            if current_batch_size + doc_tokenized_len > max_batch_size:
+                texts_tokenized.append([])
+                doc_bounds.append([0]) # начинаем с последней границы в последнем батче
+                current_batch_size = 0
+            texts_tokenized[-1].extend(doc_tokenized)
+            doc_bounds[-1].append(doc_bounds[-1][-1] + doc_tokenized_len)
+            current_batch_size += doc_tokenized_len
+
+        if self._vocab is None:
+            self._vocab = self._create_vocabulary_from_set(tokens)
+
+        self._batch_data_jax = [(jnp.array([self._vocab[t] for t in tt]), tuple(db)) 
+                                for tt, db 
+                                in zip(texts_tokenized, doc_bounds)]
+
+        return self._batch_data_jax
 
     def _preprocess_text(self, text: str) -> list[str]:
         """Apply preprocessing and tokenization to a single document."""

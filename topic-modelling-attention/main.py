@@ -1,12 +1,6 @@
-from matplotlib.pylab import ma
-from sys import path as syspath
-from os import path as ospath
 import jax.numpy as jnp
 
 from sklearn.datasets import fetch_20newsgroups
-
-#import matplotlib.pyplot as plt
-#import seaborn as sns
 
 #from cartm.experimental_model import ExperimentalContextTopicModel
 #from cartm.attentive_model import AttentiveTopicModel
@@ -22,17 +16,18 @@ warnings.simplefilter('error', RuntimeWarning)
 
 if __name__ == '__main__':
 
-    data = fetch_20newsgroups(data_home='./data/', subset='all').data
-    data = data[:400]
-    #with open('./data/test_data.txt') as f:
-    #    data = f.readlines()
+    #data = fetch_20newsgroups(data_home='./data/', subset='all').data
+    #data = data[:400]
+    with open('./data/test_data.txt') as f:
+        data = f.readlines()
 
     preprocessor = DatasetPreprocessor(
         stopwords=set(), 
         min_word_len=0
         )
     #tokenized_data, document_bounds = preprocessor.fit_transform(data)
-    batch_data = preprocessor.fit_transform_batch(data, max_batch_size=1000)
+    #batch_data = preprocessor.fit_transform_batch_jax(data, max_batch_size=1000)
+    batch_data = preprocessor.fit_transform_batch_jax(data, max_batch_size=20)
     #print(batch_data)
 
     attentive_topic_model = MyAttentiveTopicModel(
@@ -41,7 +36,7 @@ if __name__ == '__main__':
         n_topics=10
     )
 
-    attentive_topic_model.fit(
+    attentive_topic_model.fit_jax(
         batch_data_with_doc_bounds=batch_data,
         seed=42,
     )

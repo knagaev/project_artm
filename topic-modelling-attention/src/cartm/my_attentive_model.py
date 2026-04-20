@@ -14,12 +14,13 @@ import numpy as np
 from numpy.typing import NDArray
 import jax
 import jax.numpy as jnp
+from jax import Array
 
 from . import metrics as mtc
 from . import regularization as reg
 
 @jax.jit
-def _norm_fn(x: jax.Array, eps: float) -> jax.Array:
+def _norm_jax(x: jax.Array, eps: float = 1e-10) -> jax.Array:
     x = jnp.maximum(x, jnp.zeros_like(x))
     norm = x.sum(axis=0)
     return jnp.where(norm > eps, x / norm, jnp.zeros_like(x))
@@ -173,6 +174,38 @@ def bidir_ema(
             Z[:, e-1-t] = gamma * seg[:, -1-t] + alpha * Z[:, e-t]
 
     return beta * Y + (1.0 - beta) * Z
+
+@partial(jax.jit, static_argnames=['indices'])
+def _process_row(x: Array, indices: tuple, gamma: float, beta: float) -> jax.Array:
+    y = jnp.zeros_like(x)
+    z = jnp.zeros_like(x)
+    alpha = 1.0 - gamma
+    starts = indices[:-1]
+    ends = indices[1:]
+
+    for k in range(len(starts)):
+        s, e = int(starts[k]), int(ends[k])
+        L = e - s
+        if L <= 1:
+            y = y.at[s:e].set(x[s:e])
+            z = z.at[s:e].set(x[s:e])
+            continue
+
+        seg = x[s:e]
+
+        def fwd(carry, val):
+            res = gamma * val + alpha * carry
+            return res, res
+        _, y_rest = jax.lax.scan(fwd, seg[0], seg[1:], length=L-1)
+        y = y.at[s:e].set(jnp.concatenate([seg[0:1], y_rest]))
+
+        seg_rev = jnp.flip(seg)
+        _, z_rest_rev = jax.lax.scan(fwd, seg_rev[0], seg_rev[1:], length=L-1)
+        z = z.at[s:e].set(jnp.flip(jnp.concatenate([seg_rev[0:1], z_rest_rev])))
+
+    return beta * y + (1.0 - beta) * z
+
+bidir_ema_jax = jax.vmap(_process_row, in_axes=(0, None, None, None))
 
 class MyAttentiveTopicModel:
     """
@@ -1360,3 +1393,103 @@ class MyAttentiveTopicModel:
 
             if it % 10 == 00:
                 print(f"{it=}")
+
+
+    def fit_jax(
+            self,
+            batch_data_with_doc_bounds: list[tuple[Array, tuple]],
+            *,
+            max_iter: int = 1000,
+            tol: float = 1e-3,
+            seed: int = 42,
+            gamma: float = 0.6,
+            beta: float = 0.5
+    ):
+        # Инициализация близка к шагу 1 из алгоритма:
+        # phi инициализируется случайно и нормируется по темам,
+        # n_t стартует с равномерного вектора единиц.
+        key: Array = jax.random.key(seed)
+
+        phi: Array = _norm_jax(jax.random.uniform(
+            key=key,
+            shape=(self.n_topics, self.vocab_size)),
+            eps=self._eps
+        )
+        
+        n_t: Array = jnp.full(
+            shape=(self.n_topics, ),
+            fill_value=1.0,
+        )
+        grad_regularization = self._compose_regularizations()
+        grad_alpha_regularization = self._compose_alpha_regularizations()
+
+        n_w: Array = jnp.zeros(self.vocab_size)
+
+        for it in range(max_iter): #// шаг 2 - начало цикла проходов по всей коллекции
+            #// шаг 3 инициализация
+            n_tw: Array = jnp.zeros_like(phi)
+            N_tw: Array = jnp.zeros_like(phi)
+            n_t_tilda: Array = jnp.zeros_like(n_t)
+            #// конец шаг 3 инициализация
+
+            #// цикл для всех батчей шаги 4-11
+            for batch, doc_bounds in batch_data_with_doc_bounds:
+
+                #// шаг 5 
+                p_ti: Array = phi[:, batch] #// шаг 5 (I, T) строки (распределение по темам) для токенов по порядку позиций в батче 
+
+                #//здесь возможно вставить шаг 6 цикл для L блоков внимания
+
+                #// шаг 7 
+                theta_ti: Array = bidir_ema_jax(
+                    p_ti, 
+                    doc_bounds, 
+                    gamma, 
+                    beta
+                )
+
+                #// шаг 8 
+                p_ti = _norm_jax(p_ti * theta_ti / n_t[:, None])
+
+                #// шаг 9 - расчет q_wi
+                wi_equal_w: Array = (batch == jnp.arange(phi.shape[1])[:, None]).astype(float)
+                q_wi = bidir_ema_jax(
+                    wi_equal_w, 
+                    doc_bounds, 
+                    gamma, 
+                    beta
+                )
+
+                #// шаг 10 
+                N_tw += (p_ti / theta_ti) @ q_wi.T
+                
+                #// шаг 11.1 
+                rows = jnp.arange(self.n_topics)[:, None]
+                n_tw = jnp.add.at(n_tw, (rows, batch), p_ti, inplace=False)
+
+                #// шаг 11.2 
+                n_t_tilda += np.sum(p_ti, axis=1)
+
+                #// шаг ~11.3
+                n_w += jnp.bincount(batch, minlength=phi.shape[1])
+
+            #// конец цикл для всех батчей шаги 4-11
+
+            phi_new = _norm_jax(n_tw + jnp.divide(n_tw * N_tw, n_w))
+            #phi_new = _norm_jax(n_tw)
+            n_t = n_t_tilda
+
+            diff_norm = jnp.linalg.norm(phi_new - phi)
+            print(f"{it=}")
+            print(f"{diff_norm=}")
+            '''self._calc_metrics(
+                phi_it=phi_it,
+                phi_wt=phi_new,
+                theta=theta,
+                verbose=verbose,
+            )'''
+
+            phi = phi_new
+            if diff_norm < tol:
+                self.phi = phi
+                break
