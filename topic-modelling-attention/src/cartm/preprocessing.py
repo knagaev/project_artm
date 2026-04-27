@@ -125,7 +125,7 @@ class DatasetPreprocessor:
             self,
             data: Sequence[str],
             *,
-            max_batch_size:int = 10000,
+            batch_size:int = 10000,
     ) -> list[tuple[NDArray, NDArray]]:
         """
         Learn the vocabulary dictionary and return a flattened list of all
@@ -140,19 +140,19 @@ class DatasetPreprocessor:
         tokens = set()
         texts_tokenized = [[]]
         doc_bounds = [[0]]
-        current_batch_size = 0
+        batch_pos = 0
         
         for doc in data:
             doc_tokenized = self._preprocess_text(doc)
             tokens.update(doc_tokenized)
             doc_tokenized_len = len(doc_tokenized)
-            if current_batch_size + doc_tokenized_len > max_batch_size:
+            if batch_pos + doc_tokenized_len > batch_size:
                 texts_tokenized.append([])
                 doc_bounds.append([0]) # начинаем с последней границы в последнем батче
-                current_batch_size = 0
+                batch_pos = 0
             texts_tokenized[-1].extend(doc_tokenized)
             doc_bounds[-1].append(doc_bounds[-1][-1] + doc_tokenized_len)
-            current_batch_size += doc_tokenized_len
+            batch_pos += doc_tokenized_len
 
         if self._vocab is None:
             self._vocab = self._create_vocabulary_from_set(tokens)
@@ -163,11 +163,12 @@ class DatasetPreprocessor:
 
         return self._batch_data
 
+
     def fit_transform_batch_jax(
             self,
             data: Sequence[str],
             *,
-            max_batch_size:int = 10000,
+            batch_size:int = 10000,
     ) -> list[tuple[Array, tuple]]:
         """
         Learn the vocabulary dictionary and return a flattened list of all
@@ -182,19 +183,33 @@ class DatasetPreprocessor:
         tokens = set()
         texts_tokenized = [[]]
         doc_bounds = [[0]]
-        current_batch_size = 0
+        batch_pos = 0
         
         for doc in data:
             doc_tokenized = self._preprocess_text(doc)
             tokens.update(doc_tokenized)
             doc_tokenized_len = len(doc_tokenized)
-            if current_batch_size + doc_tokenized_len > max_batch_size:
-                texts_tokenized.append([])
+
+            doc_pos = 0
+            while doc_pos < doc_tokenized_len:
+                add_tokens = min(doc_tokenized_len - doc_pos, batch_size - batch_pos)
+                texts_tokenized[-1].extend(doc_tokenized[doc_pos: doc_pos + add_tokens])
+                doc_pos += add_tokens
+                doc_bounds[-1].append(doc_bounds[-1][-1] + add_tokens)
+                batch_pos += add_tokens
+                if batch_pos >= batch_size:
+                    texts_tokenized.append([])
+                    doc_bounds.append([0])
+                    batch_pos = 0
+
+            '''if batch_pos + doc_tokenized_len > batch_size:
+                texts_tokenized[-1].extend(doc_tokenized[:(batch_size - batch_pos)])
+                texts_tokenized.append(doc_tokenized[:(batch_size - batch_pos)])
                 doc_bounds.append([0]) # начинаем с последней границы в последнем батче
-                current_batch_size = 0
+                batch_pos = 0
             texts_tokenized[-1].extend(doc_tokenized)
             doc_bounds[-1].append(doc_bounds[-1][-1] + doc_tokenized_len)
-            current_batch_size += doc_tokenized_len
+            batch_pos += doc_tokenized_len'''
 
         if self._vocab is None:
             self._vocab = self._create_vocabulary_from_set(tokens)
@@ -290,6 +305,7 @@ class DatasetPreprocessor:
         self._data = np.array(docs_data)
 
         return self._data
+
 
 class BatchLoader:
     def __init__(
