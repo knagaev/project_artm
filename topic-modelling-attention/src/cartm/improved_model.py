@@ -56,7 +56,9 @@ class AttentiveTopicModel(ContextTopicModel):
     ) -> jax.Array:
         n_wt = jnp.add.at(jnp.zeros_like(phi.T), batch, p_ti.T, inplace=False)
         phi_new = n_wt.T + phi * N_tw
+        jax.debug.print("Value of phi_new_1 is {phi_new}", phi_new=phi_new[0])
         phi_new -= phi * grad_reg(phi)
+        jax.debug.print("Value of phi_new_2 is {phi_new}", phi_new=phi_new[0])
         phi_new = self._norm(phi_new, axis=0)
         return phi_new
 

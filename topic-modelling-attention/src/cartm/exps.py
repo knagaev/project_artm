@@ -621,7 +621,7 @@ def run_one_model(
     print("phi first row:", phi_np[0])
     print("phi first column:", phi_np[:, 0])
 
-    np.save('phi Stanislavo.npy', phi_np)
+    np.save('phi Stanislavo 10.npy', phi_np)
     
     import json
     # Save to file

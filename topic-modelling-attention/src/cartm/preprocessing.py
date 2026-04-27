@@ -329,7 +329,7 @@ class BatchLoader:
         self.batch_size = batch_size
         self._batches = []
 
-        '''num_batches = jnp.ceil(len(data) / batch_size).astype(int)
+        num_batches = jnp.ceil(len(data) / batch_size).astype(int)
         for i in range(num_batches):
             start_idx = i * self.batch_size
             end_idx = (i + 1) * self.batch_size
@@ -352,8 +352,8 @@ class BatchLoader:
                     jnp.array([end_idx - start_idx]),
                 ], dtype=int)
 
-            self._batches.append((data_batch, doc_bounds_batch))'''
-
+            self._batches.append((data_batch, doc_bounds_batch))
+        '''
         if len(doc_bounds) == 0:
             return []
 
@@ -367,6 +367,7 @@ class BatchLoader:
 
         # np.split принимает индексы разрезов (последний len(doc_bounds) отбрасываем)
         return np.split(doc_bounds, split_idx[:-1])
+        '''
 
     def __len__(self):
         return len(self._batches)
