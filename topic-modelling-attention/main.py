@@ -1,4 +1,5 @@
 import jax.numpy as jnp
+import numpy as np
 
 from sklearn.datasets import fetch_20newsgroups
 
@@ -22,13 +23,15 @@ if __name__ == '__main__':
     #    data = f.readlines()
 
     preprocessor = DatasetPreprocessor(
-        stopwords=set(), 
-        min_word_len=0
+        stopwords=None, #set(), 
+        min_word_len=2
         )
+
     #tokenized_data, document_bounds = preprocessor.fit_transform(data)
     batch_data = preprocessor.fit_transform_batch_jax(data, batch_size=1000)
     #batch_data = preprocessor.fit_transform_batch_jax(data, batch_size=20)
     #print(batch_data)
+    print(len(preprocessor.vocabulary)) 
 
     attentive_topic_model = MyAttentiveTopicModel(
         vocab_size=len(preprocessor.vocabulary),
@@ -42,6 +45,8 @@ if __name__ == '__main__':
     )
 
     print(attentive_topic_model.phi[:, 0])
+
+    np.save('my_phi.npy', np.asarray(attentive_topic_model.phi))
 
     '''
     for i in range(5):

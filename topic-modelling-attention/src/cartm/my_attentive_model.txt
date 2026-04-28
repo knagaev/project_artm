@@ -30,46 +30,181 @@ def _norm_numpy(x: NDArray, eps: float = 1e-6) -> NDArray:
     norm = x.sum(axis=0)
     return np.divide(x, norm, out=np.zeros_like(x), where=norm != 0)
 
-@partial(jax.jit)
-def _process_row(x: Array, indices: Array, gamma: float, beta: float) -> jax.Array:
-    """
-    Обработка одной строки (одной темы) с поддержкой динамических границ.
-    x: (I,) - последовательность значений.
-    indices: (D+1,) - границы документов в виде jax.Array.
-    """
+def old_bidir_ema(
+                X: NDArray[np.float64], 
+                indices: NDArray[np.int64], 
+                gamma: np.float64 = np.float64(0.6), 
+                beta: np.float64 = np.float64(0.5)
+             ) -> NDArray[np.float64]:
+    
+    #X = np.asarray(X, dtype=float)
+    #indices = np.asarray(indices, dtype=int)
+    H, I = X.shape
+    
+    if gamma == 1.0:
+        return X.copy()
+    
     alpha = 1.0 - gamma
-    seq_len = x.shape[0]
-    
-    # 1. Создаем маску начала сегмента
-    # indices[:-1] содержит начальные позиции каждого документа
-    starts = indices[:-1]
-    is_start = jnp.zeros(seq_len, dtype=bool)
-    is_start = is_start.at[starts].set(True)
-    
-    # 2. Прямой EMA (Forward)
-    def fwd_step(prev_ema, inputs):
-        val, start = inputs
-        # Если начало сегмента, сбрасываем EMA на текущее значение (как в оригинале Y[:, s] = seg[:, 0])
-        # Иначе применяем формулу EMA: y_t = gamma * x_t + alpha * y_{t-1}
-        new_ema = jnp.where(start, val, gamma * val + alpha * prev_ema)
-        return new_ema, new_ema
+    arange = np.arange(I)
+    alpha_pow = alpha ** arange
+    alpha_inv_pow = 1.0 / alpha_pow
 
-    # Инициализируем carry нулем; для первого элемента is_start=True, 
-    # поэтому carry корректно установится в x[0].
-    _, y = jax.lax.scan(fwd_step, 0.0, (x, is_start))
+    def calc_right_ema(X_in, idx_in):
+        W = X_in * alpha_inv_pow
+        global_cum = np.cumsum(W, axis=1)
+        
+        resets = idx_in[1:-1]
+        mask = np.zeros(I, dtype=int)
+        if len(resets) > 0:
+            mask[resets] = resets
+            
+        last_reset = np.maximum.accumulate(mask)
+        correction = np.zeros((H, I))
+        valid = last_reset > 0
+        if np.any(valid):
+            correction[:, valid] = global_cum[:, last_reset[valid] - 1]
+        
+        seg_cum = global_cum - correction
+        
+        lengths = np.diff(idx_in)
+        starts = idx_in[:-1]
+        X_starts = np.repeat(X_in[:, starts], lengths, axis=1)
+        alpha_inv_starts = np.repeat(alpha_inv_pow[starts], lengths)
+        
+        term1 = alpha_pow * alpha * alpha_inv_starts * X_starts
+        term2 = gamma * alpha_pow * seg_cum
+        return term1 + term2
+
+    right_ema = calc_right_ema(X, indices)
     
-    # 3. Обратный EMA (Backward)
-    # Переворачиваем последовательность и маску
-    x_rev = jnp.flip(x)
-    is_start_rev = jnp.flip(is_start) 
-    # В обратном проходе "началом" сегмента является его последний элемент,
-    # который становится первым в перевернутом. is_start_rev это учитывает.
+    X_rev = X[:, ::-1]
+    rev_indices = I - indices[::-1]
+    left_ema_rev = calc_right_ema(X_rev, rev_indices)
+    left_ema = left_ema_rev[:, ::-1]
     
-    _, z_rev = jax.lax.scan(fwd_step, 0.0, (x_rev, is_start_rev))
-    z = jnp.flip(z_rev)
+    return beta * right_ema + (1.0 - beta) * left_ema
+
+def local_bidir_ema(
+    X: NDArray[np.float64], 
+    indices: NDArray[np.int64], 
+    gamma: np.float64 = np.float64(0.6), 
+    beta: np.float64 = np.float64(0.5)
+) -> NDArray[np.float64]:
+    H, I = X.shape
     
+    if gamma == 1.0:
+        return X.copy()
+    
+    alpha = 1.0 - gamma
+    starts = indices[:-1]
+    lengths = np.diff(indices)
+    
+    # 1. Относительные индексы: [0,1,2,...,L1-1, 0,1,...,L2-1, ...]
+    # Экспоненты теперь ограничены max(lengths), а не I
+    rel_arange = np.arange(I) - np.repeat(starts, lengths)
+    
+    # 2. Стабилизация: ограничиваем min значение, чтобы 1/alpha_pow не уходил в inf
+    #eps = np.finfo(np.float64).tiny
+    eps = 1e-12
+    alpha_pow = np.maximum(alpha ** rel_arange, eps)
+    alpha_inv_pow = 1.0 / alpha_pow
+
+    def calc_right_ema(X_in, idx_in):
+        W = X_in * alpha_inv_pow
+        global_cum = np.cumsum(W, axis=1)
+        
+        resets = idx_in[1:-1]
+        mask = np.zeros(I, dtype=int)
+        if len(resets) > 0:
+            mask[resets] = resets
+            
+        last_reset = np.maximum.accumulate(mask)
+        correction = np.zeros((H, I))
+        valid = last_reset > 0
+        if np.any(valid):
+            correction[:, valid] = global_cum[:, last_reset[valid] - 1]
+        
+        seg_cum = global_cum - correction
+        
+        X_starts = np.repeat(X_in[:, starts], lengths, axis=1)
+        # На началах сегментов rel_arange == 0, поэтому alpha_inv_pow == 1.0
+        alpha_inv_starts = np.repeat(alpha_inv_pow[starts], lengths)
+        
+        term1 = alpha_pow * alpha * alpha_inv_starts * X_starts
+        term2 = gamma * alpha_pow * seg_cum
+        return term1 + term2
+
+    right_ema = calc_right_ema(X, indices)
+    
+    X_rev = X[:, ::-1]
+    rev_indices = I - indices[::-1]
+    left_ema_rev = calc_right_ema(X_rev, rev_indices)
+    left_ema = left_ema_rev[:, ::-1]
+    
+    return beta * right_ema + (1.0 - beta) * left_ema
+
+def bidir_ema(
+    X: NDArray[np.float64], 
+    indices: NDArray[np.int64], 
+    gamma: np.float64 = np.float64(0.6), 
+    beta: np.float64 = np.float64(0.5)
+) -> NDArray[np.float64]:
+    H, I = X.shape
+    Y = np.zeros_like(X)
+    Z = np.zeros_like(X)
+    alpha = 1.0 - gamma
+
+    starts = indices[:-1]
+    ends = indices[1:]
+
+    for k in range(len(starts)):
+        s, e = starts[k], ends[k]
+        seg = X[:, s:e]
+        L = e - s
+        if L == 0:
+            continue
+
+        # Первая позиция сегмента
+        Y[:, s] = seg[:, 0]
+        Z[:, e-1] = seg[:, -1]
+
+        # Векторизованный проход по строкам, цикл только по длине сегмента
+        for t in range(1, L):
+            Y[:, s+t] = gamma * seg[:, t] + alpha * Y[:, s+t-1]
+            Z[:, e-1-t] = gamma * seg[:, -1-t] + alpha * Z[:, e-t]
+
+    return beta * Y + (1.0 - beta) * Z
+
+@partial(jax.jit, static_argnames=['indices'])
+def _process_row(x: Array, indices: tuple, gamma: float, beta: float) -> jax.Array:
+    y = jnp.zeros_like(x)
+    z = jnp.zeros_like(x)
+    alpha = 1.0 - gamma
+    starts = indices[:-1]
+    ends = indices[1:]
+
+    for k in range(len(starts)):
+        s, e = int(starts[k]), int(ends[k])
+        L = e - s
+        if L <= 1:
+            y = y.at[s:e].set(x[s:e])
+            z = z.at[s:e].set(x[s:e])
+            continue
+
+        seg = x[s:e]
+
+        def fwd(carry, val):
+            res = gamma * val + alpha * carry
+            return res, res
+        _, y_rest = jax.lax.scan(fwd, seg[0], seg[1:], length=L-1)
+        y = y.at[s:e].set(jnp.concatenate([seg[0:1], y_rest]))
+
+        seg_rev = jnp.flip(seg)
+        _, z_rest_rev = jax.lax.scan(fwd, seg_rev[0], seg_rev[1:], length=L-1)
+        z = z.at[s:e].set(jnp.flip(jnp.concatenate([seg_rev[0:1], z_rest_rev])))
+
     return beta * y + (1.0 - beta) * z
-    
+
 bidir_ema_jax = jax.vmap(_process_row, in_axes=(0, None, None, None))
 
 class MyAttentiveTopicModel:
@@ -1077,9 +1212,10 @@ class MyAttentiveTopicModel:
         grad_regularization = self._compose_regularizations()
         grad_alpha_regularization = self._compose_alpha_regularizations()
 
+        n_w = np.zeros(self.vocab_size)
+
         for it in range(max_iter): #// шаг 2 - начало цикла проходов по всей коллекции
             #// шаг 3 инициализация
-            n_w = np.zeros(self.vocab_size)
             n_tw: NDArray = np.zeros_like(phi)
             N_tw: NDArray = np.zeros_like(phi)
             n_t_tilda: NDArray = np.zeros_like(n_t)
@@ -1133,8 +1269,8 @@ class MyAttentiveTopicModel:
             n_t = n_t_tilda
 
             diff_norm = np.linalg.norm(phi_new - phi)
-            jax.debug.print("Value of it: {it}", it=it)
-            jax.debug.print("Value of diff_norm: {diff_norm}", diff_norm=diff_norm)
+            print(f"{it=}")
+            print(f"{diff_norm=}")
             '''self._calc_metrics(
                 phi_it=phi_it,
                 phi_wt=phi_new,
@@ -1287,10 +1423,10 @@ class MyAttentiveTopicModel:
         grad_regularization = self._compose_regularizations()
         grad_alpha_regularization = self._compose_alpha_regularizations()
 
+        n_w: Array = jnp.zeros(self.vocab_size)
 
         for it in range(max_iter): #// шаг 2 - начало цикла проходов по всей коллекции
             #// шаг 3 инициализация
-            n_w: Array = jnp.zeros(self.vocab_size)
             n_tw: Array = jnp.zeros_like(phi)
             N_tw: Array = jnp.zeros_like(phi)
             n_t_tilda: Array = jnp.zeros_like(n_t)
@@ -1313,11 +1449,9 @@ class MyAttentiveTopicModel:
                 )
 
                 #// шаг 8 
-                #p_ti = _norm_jax(p_ti * theta_ti / n_t[:, None])
-                p_ti = _norm_jax(p_ti * theta_ti / jnp.maximum(n_t[:, None], self._eps))
+                p_ti = _norm_jax(p_ti * theta_ti / n_t[:, None])
 
                 #// шаг 9 - расчет q_wi
-                '''
                 wi_equal_w: Array = (batch == jnp.arange(phi.shape[1])[:, None]).astype(float)
                 q_wi = bidir_ema_jax(
                     wi_equal_w, 
@@ -1327,34 +1461,22 @@ class MyAttentiveTopicModel:
                 )
 
                 #// шаг 10 
-                #N_tw += (p_ti / theta_ti) @ q_wi.T
-                N_tw += (p_ti / jnp.maximum(theta_ti, self._eps)) @ q_wi.T
-                '''
-                N_tw = self._calc_n_tw(
-                    p_ti=p_ti.T,
-                    theta_ti=theta_ti.T,
-                    batch=batch,
-                    ctx_bounds=doc_bounds,
-                    weights_t=None,
-                ).T
-
+                N_tw += (p_ti / theta_ti) @ q_wi.T
+                
                 #// шаг 11.1 
                 rows = jnp.arange(self.n_topics)[:, None]
                 n_tw = jnp.add.at(n_tw, (rows, batch), p_ti, inplace=False)
 
                 #// шаг 11.2 
-                n_t_tilda += jnp.sum(p_ti, axis=1)
+                n_t_tilda += np.sum(p_ti, axis=1)
 
                 #// шаг ~11.3
                 n_w += jnp.bincount(batch, minlength=phi.shape[1])
 
             #// конец цикл для всех батчей шаги 4-11
 
+            phi_new = _norm_jax(n_tw + jnp.divide(n_tw * N_tw, n_w))
             #phi_new = _norm_jax(n_tw)
-            #phi_new = _norm_jax(n_tw + jnp.divide(n_tw * N_tw, n_w))
-            #phi_new = _norm_jax(n_tw + n_tw * N_tw / jnp.maximum(n_w, self._eps))
-            attn_lr = 0.1
-            phi_new = _norm_jax(n_tw + attn_lr * n_tw * N_tw / jnp.maximum(n_w, self._eps))
             n_t = n_t_tilda
 
             diff_norm = jnp.linalg.norm(phi_new - phi)

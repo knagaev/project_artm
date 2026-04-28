@@ -43,7 +43,7 @@ class DatasetPreprocessor:
         self._doc_bounds = None
 
         self._batch_data: list[tuple[NDArray, NDArray]] = []
-        self._batch_data_jax: list[tuple[Array, tuple]] = []
+        self._batch_data_jax: list[tuple[Array, Array]] = []
 
         if preprocessor is not None and not callable(preprocessor):
             raise TypeError(
@@ -169,7 +169,7 @@ class DatasetPreprocessor:
             data: Sequence[str],
             *,
             batch_size:int = 10000,
-    ) -> list[tuple[Array, tuple]]:
+    ) -> list[tuple[Array, Array]]:
         """
         Learn the vocabulary dictionary and return a flattened list of all
         terms from all documents.
@@ -214,7 +214,7 @@ class DatasetPreprocessor:
         if self._vocab is None:
             self._vocab = self._create_vocabulary_from_set(tokens)
 
-        self._batch_data_jax = [(jnp.array([self._vocab[t] for t in tt]), tuple(db)) 
+        self._batch_data_jax = [(jnp.array([self._vocab[t] for t in tt]), jnp.array(db)) 
                                 for tt, db 
                                 in zip(texts_tokenized, doc_bounds)]
 
