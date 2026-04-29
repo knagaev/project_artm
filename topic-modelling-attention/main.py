@@ -18,7 +18,7 @@ warnings.simplefilter('error', RuntimeWarning)
 if __name__ == '__main__':
 
     data = fetch_20newsgroups(data_home='./data/', subset='all').data
-    data = data[:400]
+    data = data[:100]
     #with open('./data/test_data.txt') as f:
     #    data = f.readlines()
 
@@ -35,7 +35,7 @@ if __name__ == '__main__':
 
     attentive_topic_model = MyAttentiveTopicModel(
         vocab_size=len(preprocessor.vocabulary),
-        ctx_len=3,
+        ctx_len=10,
         n_topics=10
     )
 

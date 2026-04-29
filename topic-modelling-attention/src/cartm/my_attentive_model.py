@@ -117,7 +117,7 @@ class MyAttentiveTopicModel:
         self._eps = eps
         self.phi = None
         self.n_t: jax.Array | None = None
-        self.n_w = None
+        self.n_w: jax.Array | None = None
         self._validate_attention_config()
 
         self._regularizations = {}
@@ -1261,7 +1261,7 @@ class MyAttentiveTopicModel:
 
     def fit_jax(
             self,
-            batch_data_with_doc_bounds: list[tuple[Array, tuple]],
+            batch_data_with_doc_bounds: list[tuple[Array, Array]],
             *,
             max_iter: int = 1000,
             tol: float = 1e-3,
@@ -1292,6 +1292,7 @@ class MyAttentiveTopicModel:
             #// шаг 3 инициализация
             n_w: Array = jnp.zeros(self.vocab_size)
             n_tw: Array = jnp.zeros_like(phi)
+            simple_N_tw: Array = jnp.zeros_like(phi)
             N_tw: Array = jnp.zeros_like(phi)
             n_t_tilda: Array = jnp.zeros_like(n_t)
             #// конец шаг 3 инициализация
@@ -1317,7 +1318,6 @@ class MyAttentiveTopicModel:
                 p_ti = _norm_jax(p_ti * theta_ti / jnp.maximum(n_t[:, None], self._eps))
 
                 #// шаг 9 - расчет q_wi
-                '''
                 wi_equal_w: Array = (batch == jnp.arange(phi.shape[1])[:, None]).astype(float)
                 q_wi = bidir_ema_jax(
                     wi_equal_w, 
@@ -1328,15 +1328,19 @@ class MyAttentiveTopicModel:
 
                 #// шаг 10 
                 #N_tw += (p_ti / theta_ti) @ q_wi.T
-                N_tw += (p_ti / jnp.maximum(theta_ti, self._eps)) @ q_wi.T
-                '''
-                N_tw = self._calc_n_tw(
+                #N_tw += (p_ti / jnp.maximum(theta_ti, self._eps)) @ q_wi.T
+                
+                simple_N_tw += self._calc_n_tw(
                     p_ti=p_ti.T,
                     theta_ti=theta_ti.T,
                     batch=batch,
                     ctx_bounds=doc_bounds,
                     weights_t=None,
                 ).T
+
+                #print("Расхождение simple_N_tw и N_tw", jnp.allclose(simple_N_tw, N_tw).block_until_ready())
+                #print(simple_N_tw[0])
+                #print(N_tw[0])
 
                 #// шаг 11.1 
                 rows = jnp.arange(self.n_topics)[:, None]
@@ -1346,15 +1350,20 @@ class MyAttentiveTopicModel:
                 n_t_tilda += jnp.sum(p_ti, axis=1)
 
                 #// шаг ~11.3
-                n_w += jnp.bincount(batch, minlength=phi.shape[1])
+                if it < 1:
+                    n_w += jnp.bincount(batch, minlength=phi.shape[1])
 
             #// конец цикл для всех батчей шаги 4-11
+
+            if it < 1:
+                self.n_w = n_w
+                jax.debug.print("n_w = non_zero {sum_nz_n_w}", sum_nz_n_w=jnp.sum(self.n_w > 0))
 
             #phi_new = _norm_jax(n_tw)
             #phi_new = _norm_jax(n_tw + jnp.divide(n_tw * N_tw, n_w))
             #phi_new = _norm_jax(n_tw + n_tw * N_tw / jnp.maximum(n_w, self._eps))
-            attn_lr = 0.1
-            phi_new = _norm_jax(n_tw + attn_lr * n_tw * N_tw / jnp.maximum(n_w, self._eps))
+            attn_lr = 1
+            phi_new = _norm_jax(n_tw + attn_lr * jnp.divide(n_tw * N_tw, jnp.maximum(self.n_w, self._eps)))
             n_t = n_t_tilda
 
             diff_norm = jnp.linalg.norm(phi_new - phi)
