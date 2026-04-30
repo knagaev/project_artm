@@ -168,3 +168,5 @@ experiments-*.ipynb
 
 # VSCode configuration
 .vscode
+
+Deep_Learning_with_JAX/
