@@ -30,42 +30,30 @@ def _norm_numpy(x: NDArray, eps: float = 1e-6) -> NDArray:
     norm = x.sum(axis=0)
     return np.divide(x, norm, out=np.zeros_like(x), where=norm != 0)
 
-@partial(jax.jit)
-def _process_row(x: Array, indices: Array, gamma: float, beta: float) -> jax.Array:
-    """
-    Обработка одной строки (одной темы) с поддержкой динамических границ.
-    x: (I,) - последовательность значений.
-    indices: (D+1,) - границы документов в виде jax.Array.
-    """
+@jax.jit
+def _process_row(x: Array, indices: Array, gamma: float, beta: float) -> Array:
     alpha = 1.0 - gamma
     seq_len = x.shape[0]
     
-    # 1. Создаем маску начала сегмента
-    # indices[:-1] содержит начальные позиции каждого документа
-    starts = indices[:-1]
-    is_start = jnp.zeros(seq_len, dtype=bool)
-    is_start = is_start.at[starts].set(True)
+    # Маска сброса для прямого прохода (начало сегмента)
+    is_start = jnp.zeros(seq_len, dtype=bool).at[indices[:-1]].set(True)
+    # Маска сброса для обратного прохода (конец сегмента)
+    is_end   = jnp.zeros(seq_len, dtype=bool).at[indices[1:] - 1].set(True)
     
-    # 2. Прямой EMA (Forward)
-    def fwd_step(prev_ema, inputs):
-        val, start = inputs
-        # Если начало сегмента, сбрасываем EMA на текущее значение (как в оригинале Y[:, s] = seg[:, 0])
-        # Иначе применяем формулу EMA: y_t = gamma * x_t + alpha * y_{t-1}
-        new_ema = jnp.where(start, val, gamma * val + alpha * prev_ema)
-        return new_ema, new_ema
-
-    # Инициализируем carry нулем; для первого элемента is_start=True, 
-    # поэтому carry корректно установится в x[0].
-    _, y = jax.lax.scan(fwd_step, 0.0, (x, is_start))
+    # Общий шаг скана
+    def scan_step(carry, inputs):
+        val, is_reset = inputs
+        # Если сброс -> новое значение = x, иначе рекуррентная формула
+        new_val = jnp.where(is_reset, val, gamma * val + alpha * carry)
+        return new_val, new_val
+        
+    # Прямой EMA (сброс на is_start)
+    _, y = jax.lax.scan(scan_step, 0.0, (x, is_start))
     
-    # 3. Обратный EMA (Backward)
-    # Переворачиваем последовательность и маску
+    # Обратный EMA (переворачиваем массив и маску конца)
     x_rev = jnp.flip(x)
-    is_start_rev = jnp.flip(is_start) 
-    # В обратном проходе "началом" сегмента является его последний элемент,
-    # который становится первым в перевернутом. is_start_rev это учитывает.
-    
-    _, z_rev = jax.lax.scan(fwd_step, 0.0, (x_rev, is_start_rev))
+    is_end_rev = jnp.flip(is_end)  # Теперь True стоит на первом элементе перевёрнутого сегмента
+    _, z_rev = jax.lax.scan(scan_step, 0.0, (x_rev, is_end_rev))
     z = jnp.flip(z_rev)
     
     return beta * y + (1.0 - beta) * z
@@ -1318,7 +1306,7 @@ class MyAttentiveTopicModel:
                 p_ti = _norm_jax(p_ti * theta_ti / jnp.maximum(n_t[:, None], self._eps))
 
                 #// шаг 9 - расчет q_wi
-                wi_equal_w: Array = (batch == jnp.arange(phi.shape[1])[:, None]).astype(float)
+                '''wi_equal_w: Array = (batch == jnp.arange(phi.shape[1])[:, None]).astype(float)
                 q_wi = bidir_ema_jax(
                     wi_equal_w, 
                     doc_bounds, 
@@ -1328,9 +1316,9 @@ class MyAttentiveTopicModel:
 
                 #// шаг 10 
                 #N_tw += (p_ti / theta_ti) @ q_wi.T
-                #N_tw += (p_ti / jnp.maximum(theta_ti, self._eps)) @ q_wi.T
+                #N_tw += (p_ti / jnp.maximum(theta_ti, self._eps)) @ q_wi.T'''
                 
-                simple_N_tw += self._calc_n_tw(
+                N_tw += self._calc_n_tw(
                     p_ti=p_ti.T,
                     theta_ti=theta_ti.T,
                     batch=batch,

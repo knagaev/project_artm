@@ -1,0 +1,2 @@
+collection,corpus,size_requested,seed,experiment_name,model_name,n_docs,vocab_size,n_topics,coherence,perplexity,phi_sparsity,topic_variance,runtime_seconds,use_llm_alignment,ctx_len,lr,max_iter,tol,batch_size,top_k,decor_tau,sparsity_tau,llm_reg_tau,llm_model_name,llm_batch_size,llm_target_metric,llm_temperature
+bbc_100,bbc,100,1,baseline_cli,baseline,100,4393,5,-8.064384460449219,7.466441706052664,0.10566811263561249,1.0,15.298021471999618,False,5,0.1,100,0.001,10000,10,0.0,0.0,0.0,sentence-transformers/all-MiniLM-L6-v2,128,cosine,1.0
