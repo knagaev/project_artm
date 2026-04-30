@@ -35,7 +35,7 @@ if __name__ == '__main__':
 
     attentive_topic_model = MyAttentiveTopicModel(
         vocab_size=len(preprocessor.vocabulary),
-        ctx_len=10,
+        ctx_len=200,
         n_topics=10
     )
 

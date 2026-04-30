@@ -6,6 +6,7 @@
 пересчитывается матрица ``phi`` с поправкой на локальное внимание и
 регуляризаторы.
 """
+#from rich.panel import p
 
 from functools import partial
 from typing import Callable
@@ -1303,10 +1304,11 @@ class MyAttentiveTopicModel:
 
                 #// шаг 8 
                 #p_ti = _norm_jax(p_ti * theta_ti / n_t[:, None])
-                p_ti = _norm_jax(p_ti * theta_ti / jnp.maximum(n_t[:, None], self._eps))
+                p_t = n_t / jnp.maximum(jnp.sum(n_t), self._eps)
+                p_ti = _norm_jax(p_ti * theta_ti / jnp.maximum(p_t[:, None], self._eps))
 
                 #// шаг 9 - расчет q_wi
-                '''wi_equal_w: Array = (batch == jnp.arange(phi.shape[1])[:, None]).astype(float)
+                wi_equal_w: Array = (batch == jnp.arange(phi.shape[1])[:, None]).astype(float)
                 q_wi = bidir_ema_jax(
                     wi_equal_w, 
                     doc_bounds, 
@@ -1316,15 +1318,15 @@ class MyAttentiveTopicModel:
 
                 #// шаг 10 
                 #N_tw += (p_ti / theta_ti) @ q_wi.T
-                #N_tw += (p_ti / jnp.maximum(theta_ti, self._eps)) @ q_wi.T'''
+                N_tw += (p_ti / jnp.maximum(theta_ti, self._eps)) @ q_wi.T
                 
-                N_tw += self._calc_n_tw(
+                '''simple_N_tw += self._calc_n_tw(
                     p_ti=p_ti.T,
                     theta_ti=theta_ti.T,
                     batch=batch,
                     ctx_bounds=doc_bounds,
                     weights_t=None,
-                ).T
+                ).T'''
 
                 #print("Расхождение simple_N_tw и N_tw", jnp.allclose(simple_N_tw, N_tw).block_until_ready())
                 #print(simple_N_tw[0])
