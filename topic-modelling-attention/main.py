@@ -8,6 +8,7 @@ from sklearn.datasets import fetch_20newsgroups
 #from cartm.improved_model import AttentiveTopicModel
 #from cartm.attentive_model import MatveyAttentiveTopicModel
 from cartm.my_attentive_model import MyAttentiveTopicModel
+from cartm.regularization import DecorrelationRegularization
 
 from cartm.preprocessing import DatasetPreprocessor
 from time import time
@@ -33,10 +34,13 @@ if __name__ == '__main__':
     #print(batch_data)
     print(len(preprocessor.vocabulary)) 
 
+    decorr = DecorrelationRegularization(0.0, "wt")
+
     attentive_topic_model = MyAttentiveTopicModel(
         vocab_size=len(preprocessor.vocabulary),
         ctx_len=200,
-        n_topics=10
+        n_topics=10,
+        regularizers=[decorr],
     )
 
     attentive_topic_model.fit_jax(

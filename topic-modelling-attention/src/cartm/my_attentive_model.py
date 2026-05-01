@@ -105,8 +105,8 @@ class MyAttentiveTopicModel:
         self.n_attention_passes = n_attention_passes
         self._eps = eps
         self.phi = None
-        self.n_t: jax.Array | None = None
-        self.n_w: jax.Array | None = None
+        self.n_t: jax.Array = jnp.zeros(n_topics)
+        self.n_w: jax.Array = jnp.zeros(vocab_size)
         self._validate_attention_config()
 
         self._regularizations = {}
@@ -1276,7 +1276,6 @@ class MyAttentiveTopicModel:
         grad_regularization = self._compose_regularizations()
         grad_alpha_regularization = self._compose_alpha_regularizations()
 
-
         for it in range(max_iter): #// шаг 2 - начало цикла проходов по всей коллекции
             #// шаг 3 инициализация
             n_w: Array = jnp.zeros(self.vocab_size)
@@ -1333,8 +1332,9 @@ class MyAttentiveTopicModel:
                 #print(N_tw[0])
 
                 #// шаг 11.1 
-                rows = jnp.arange(self.n_topics)[:, None]
-                n_tw = jnp.add.at(n_tw, (rows, batch), p_ti, inplace=False)
+                #rows = jnp.arange(self.n_topics)[:, None]
+                #n_tw = jnp.add.at(n_tw, (rows, batch), p_ti, inplace=False)
+                n_tw = n_tw.at[:, batch].add(p_ti)
 
                 #// шаг 11.2 
                 n_t_tilda += jnp.sum(p_ti, axis=1)
@@ -1352,8 +1352,13 @@ class MyAttentiveTopicModel:
             #phi_new = _norm_jax(n_tw)
             #phi_new = _norm_jax(n_tw + jnp.divide(n_tw * N_tw, n_w))
             #phi_new = _norm_jax(n_tw + n_tw * N_tw / jnp.maximum(n_w, self._eps))
-            attn_lr = 1
-            phi_new = _norm_jax(n_tw + attn_lr * jnp.divide(n_tw * N_tw, jnp.maximum(self.n_w, self._eps)))
+            #attn_lr = 1
+            #phi_new = _norm_jax(n_tw + attn_lr * jnp.divide(n_tw * N_tw, jnp.maximum(self.n_w, self._eps)))
+            #phi_base = n_tw / jnp.maximum(self.n_w[:, None], self._eps)
+            phi_base = n_tw / jnp.maximum(self.n_w, self._eps)
+            reg_term = grad_regularization(phi_base)
+            phi_new = _norm_jax(n_tw + phi_base * N_tw + phi_base * reg_term)
+
             n_t = n_t_tilda
 
             diff_norm = jnp.linalg.norm(phi_new - phi)
